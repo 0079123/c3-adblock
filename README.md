@@ -2,6 +2,8 @@
 
 A **Pi-hole-style DNS ad-blocker** that runs on a **$2 ESP32-C3** — *no PSRAM required*.
 
+> 📰 Featured on [Tom's Hardware](https://www.tomshardware.com/networking/clever-hacker-fits-537-000-domains-in-a-tiny-usd5-esp32-ad-blocking-dongle-firmware-uses-only-around-50kb-of-ram-and-can-answer-blocked-lookups-in-10-milliseconds), [XDA Developers](https://www.xda-developers.com/this-tiny-esp32-powered-gadget-blocks-537000-domains-only-uses-50kb-of-ram/), and [Korben](https://korben.info/en/half-million-ad-blocking-domains-50kb-ram-esp32.html).
+
 The trick everyone misses: you don't need to keep the blocklist in RAM. Store the
 domains as **sorted 40-bit hashes in flash** and binary-search them. 140,000+ domains
 fit in ~0.7 MB of flash and are matched in ~10 ms, using **~50 KB of RAM**.
@@ -60,8 +62,13 @@ Printing notes:
 
 One USB flash to get going — after that, **firmware and blocklist both update over WiFi** (see below).
 
+> ⚠️ Use a **current PlatformIO** — the VSCode PlatformIO extension's bundled core, or
+> `pip install -U platformio` in a venv. The distro/apt `platformio` package (e.g. 4.3.4) is
+> too old and fails with `AttributeError: ... 'resultcallback'` (issue #4). A one-click browser installer is on the way (hosting TBD).
+
 ```bash
-# 1. set your WiFi creds (secrets.h is gitignored, so they stay local)
+# 1. (optional) set WiFi creds at compile time — or skip this and use the
+#    on-device setup portal (below). secrets.h is gitignored, stays local.
 cp src/secrets.example.h src/secrets.h
 #    then edit src/secrets.h -> WIFI_SSID / WIFI_PASS
 
@@ -76,6 +83,13 @@ pio run -t uploadfs
 # 4. watch it boot, note the IP / open the dashboard
 pio device monitor          # -> http://c3adblock.local
 ```
+
+### WiFi setup (no re-flash needed)
+
+If it can't connect (or you never set `secrets.h`), it starts an open access point
+**`C3-AdBlock-XXXX`** with a captive portal — join it from a phone, pick your network,
+type the password, done. To move it to a new network later: open `http://c3adblock.local/forgetwifi`,
+or hold the **BOOT** button while powering on, and the setup portal comes back.
 
 ## Over-the-air updates (no more USB)
 
@@ -123,7 +137,8 @@ dig @<c3-ip> github.com        # -> real IP  (forwarded)
 - ✅ Web dashboard — per-client block/allow counts, ban a client, add custom domains
 - ✅ mDNS (`c3adblock.local`) for discovery
 - ✅ OTA — firmware + blocklist update over WiFi, plus scheduled remote blocklist pulls
-- ⬜ Bloom filter in RAM as a fast pre-filter (skip flash for the ~99% of misses)
+- ✅ Captive-portal WiFi setup (no hardcoded creds) + one-click browser web-installer
+- ⬜ Bucketed prefix index — ~18 flash reads/lookup → ~1–2 (issue #3), the throughput win
 - ⬜ Act as the DHCP server (hand itself out as DNS) for true plug-and-play
 
 ## Credits
