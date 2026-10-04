@@ -1,5 +1,7 @@
 # esp32-c3-adblock
 
+[日本語 README](README_JP.md)
+
 A **Pi-hole-style DNS ad-blocker** that runs on a **$2 ESP32-C3** — *no PSRAM required*.
 
 > 📰 Featured on [Tom's Hardware](https://www.tomshardware.com/networking/clever-hacker-fits-537-000-domains-in-a-tiny-usd5-esp32-ad-blocking-dongle-firmware-uses-only-around-50kb-of-ram-and-can-answer-blocked-lookups-in-10-milliseconds), [XDA Developers](https://www.xda-developers.com/this-tiny-esp32-powered-gadget-blocks-537000-domains-only-uses-50kb-of-ram/), and [Korben](https://korben.info/en/half-million-ad-blocking-domains-50kb-ram-esp32.html).
@@ -42,6 +44,7 @@ makes it undeniable.
 ## Hardware
 
 - Any **ESP32-C3** board (tested on a C3 SuperMini), 4 MB flash, **no PSRAM needed**
+- Classic **ESP32** (DevKit / WROOM, 4 MB) also builds: `pio run -e esp32dev -t upload` (community-contributed, compile-tested; the C3 is the tested target)
 - Power it from a **stable USB source** (a phone charger or your router's USB port).
   Cheap/loose USB-C→A adapters can brown out the radio during WiFi transmit.
 - A **USB-A → USB-C dongle** lets it plug straight into the spare USB port on the

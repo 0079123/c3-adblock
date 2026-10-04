@@ -558,10 +558,15 @@ void setup() {
   loadCustom(); loadBanned(); loadUpdateCfg();
   Serial.printf("custom: %d, banned: %d\n", numCustom, numBanned);
 
-  // Hold BOOT (GPIO9) at power-on to wipe saved WiFi and force the setup portal.
-  pinMode(9, INPUT_PULLUP);
-  if (digitalRead(9) == LOW) { delay(60);
-    if (digitalRead(9) == LOW) { prefs.begin("wifi", false); prefs.clear(); prefs.end();
+  // Hold BOOT at power-on to wipe saved WiFi and force the setup portal.
+#if CONFIG_IDF_TARGET_ESP32C3
+  const int BOOT_PIN = 9;     // C3 BOOT button
+#else
+  const int BOOT_PIN = 0;     // classic ESP32 BOOT button (GPIO9 is a flash pin there)
+#endif
+  pinMode(BOOT_PIN, INPUT_PULLUP);
+  if (digitalRead(BOOT_PIN) == LOW) { delay(60);
+    if (digitalRead(BOOT_PIN) == LOW) { prefs.begin("wifi", false); prefs.clear(); prefs.end();
       Serial.println("[setup] BOOT held -> cleared saved WiFi"); } }
 
   if (!connectWiFi()) startConfigPortal();   // portal blocks + reboots on save; returns only when connected
