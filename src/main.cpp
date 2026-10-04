@@ -21,7 +21,13 @@
                        // have been provisioned via the captive portal (copy secrets.example.h)
 
 // ---- config ----
-static const IPAddress UPSTREAM(9, 9, 9, 9);     // Quad9
+#ifndef UPSTREAM_IP
+#define UPSTREAM_IP 9, 9, 9, 9                    // Quad9
+#endif
+#ifndef UPSTREAM_PORT
+#define UPSTREAM_PORT 53
+#endif
+static const IPAddress UPSTREAM(UPSTREAM_IP);
 static const uint16_t DNS_PORT = 53;
 static const char* BLOCKLIST_PATH = "/blocklist.bin";
 static const int HASH_BYTES = 5;
@@ -32,7 +38,7 @@ WiFiUDP dnsServer, upstreamCli;
 WebServer web(80);
 File blocklist;
 uint32_t numHashes = 0, totalBlocked = 0, totalAllowed = 0;
-uint8_t buf[600];
+uint8_t buf[1536];   // fits any non-fragmented UDP reply (EDNS answers can exceed 512)
 
 struct Dev { uint32_t ip; uint8_t mac[6]; uint32_t blocked, allowed, lastSeen; bool banned; String label; };
 static const int MAX_CLIENTS = 96;
@@ -157,10 +163,34 @@ static int buildBlocked(int qend, uint16_t qtype) {
   const uint8_t ans[] = {0xC0,0x0C, 0,1, 0,1, 0,0,1,0x2C, 0,4, 0,0,0,0};
   memcpy(buf + qend, ans, sizeof(ans)); return qend + sizeof(ans);
 }
-static int forwardUpstream(int qlen) {
-  upstreamCli.beginPacket(UPSTREAM, 53); upstreamCli.write(buf, qlen); upstreamCli.endPacket();
-  uint32_t t0 = millis();
-  while (millis() - t0 < 1000) { int sz = upstreamCli.parsePacket(); if (sz > 0) return upstreamCli.read(buf, sizeof(buf)); delay(1); }
+// Forward to upstream and wait for the reply that actually belongs to THIS query.
+// Issue #10: after one timeout the late reply used to sit in the socket and get relayed
+// to the next client (every answer shifted by one). Now: drain stale datagrams first,
+// send with a fresh random txid, and only accept a reply whose txid, question section,
+// and source address/port match. The client's own txid is restored on the way back.
+static int forwardUpstream(int qlen, int qend) {
+  upstreamCli.flush();                                   // release any half-read buffer
+  while (upstreamCli.parsePacket() > 0) upstreamCli.flush();   // drop stale late replies
+  const uint8_t cid0 = buf[0], cid1 = buf[1];
+  const uint16_t wid = (uint16_t)esp_random();
+  uint8_t q[260]; int ql = qend - 12;
+  const bool haveQ = ql > 0 && ql <= (int)sizeof(q) && qend <= qlen;
+  if (haveQ) memcpy(q, buf + 12, ql);
+  buf[0] = wid >> 8; buf[1] = wid & 0xFF;
+  upstreamCli.beginPacket(UPSTREAM, UPSTREAM_PORT); upstreamCli.write(buf, qlen); upstreamCli.endPacket();
+  const uint32_t t0 = millis();
+  while (millis() - t0 < 1000) {                         // deadline, not a retry count
+    int sz = upstreamCli.parsePacket();
+    if (sz <= 0) { delay(1); continue; }
+    const bool fromUp = upstreamCli.remoteIP() == UPSTREAM && upstreamCli.remotePort() == UPSTREAM_PORT;
+    int n = upstreamCli.read(buf, sizeof(buf));
+    upstreamCli.flush();                                 // oversized datagram can't strand rx_buffer
+    if (!fromUp || n < 12 || sz > (int)sizeof(buf)) continue;
+    if (buf[0] != (wid >> 8) || buf[1] != (wid & 0xFF)) continue;
+    if (haveQ && (n < 12 + ql || memcmp(buf + 12, q, ql) != 0)) continue;
+    buf[0] = cid0; buf[1] = cid1;
+    return n;
+  }
   return 0;
 }
 // Drain a whole RX burst per call (capped, so web/OTA still get a turn) instead of
@@ -179,7 +209,7 @@ static bool handleDns() {
     bool blocked = ban || (blockingOn && dl && numHashes && isBlocked(domain));
     int rlen;
     if (blocked) { rlen = buildBlocked(qend, qtype); totalBlocked++; if (c) c->blocked++; }
-    else         { rlen = forwardUpstream(qlen);     totalAllowed++; if (c) c->allowed++; }
+    else         { rlen = forwardUpstream(qlen, qend);     totalAllowed++; if (c) c->allowed++; }
     if (rlen > 0) { dnsServer.beginPacket(cip, cport); dnsServer.write(buf, rlen); dnsServer.endPacket(); }
   }
   return did;
@@ -331,6 +361,10 @@ static void handleFwUpload() {
 // Try provisioned NVS creds first, then the compile-time secrets.h creds as a
 // fallback (so the maintainer's own device + source builders keep working). If
 // neither connects, fall through to the config portal.
+static bool hasCreds() {
+  prefs.begin("wifi", true); bool nvs = prefs.getString("ssid", "").length() > 0; prefs.end();
+  return nvs || (WIFI_SSID && *WIFI_SSID && strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0);
+}
 static bool connectWiFi() {
   prefs.begin("wifi", true);
   String ss = prefs.getString("ssid", "");
@@ -342,7 +376,7 @@ static bool connectWiFi() {
   Serial.printf("WiFi: connecting to \"%s\"%s\n", ssid, ss.length() ? " (provisioned)" : " (secrets.h)");
   WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.begin(ssid, pass);
   uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) { delay(250); Serial.print("."); }
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 30000) { delay(250); Serial.print("."); }
   Serial.println();
   return WiFi.status() == WL_CONNECTED;
 }
@@ -387,7 +421,15 @@ static void startConfigPortal() {
   web.begin();
   Serial.printf("\n[setup] No WiFi. Join open network \"%s\" and a setup page pops up (or http://%s)\n",
                 ap, apIP.toString().c_str());
-  while (true) { dnsPortal.processNextRequest(); web.handleClient(); delay(2); }
+  // A configured device that merely failed to join (router rebooting, weak signal) must not
+  // get stuck here: if nobody is using the portal, reboot and retry WiFi every 3 minutes.
+  const bool configured = hasCreds();
+  uint32_t t0 = millis();
+  while (true) {
+    dnsPortal.processNextRequest(); web.handleClient(); delay(2);
+    if (WiFi.softAPgetStationNum() > 0) t0 = millis();          // someone is setting it up
+    if (configured && millis() - t0 > 180000UL) { Serial.println("[setup] retrying WiFi"); ESP.restart(); }
+  }
 }
 
 void setup() {
