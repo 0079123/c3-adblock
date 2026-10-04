@@ -81,7 +81,7 @@ cp src/secrets.example.h src/secrets.h
 #    then edit src/secrets.h
 
 # 2. build the blocklist hash table (default = StevenBlack base + Hagezi Light,
-#    ~140k domains, WhatsApp/social safe)
+#    ~100k entries, WhatsApp/social safe)
 python3 tools/build_blocklist.py data/blocklist.bin
 
 # 3. flash firmware + the blocklist filesystem (the one and only USB flash)
@@ -91,6 +91,22 @@ pio run -t uploadfs
 # 4. watch it boot, note the IP / open the dashboard
 pio device monitor          # -> http://c3adblock.local
 ```
+
+### Your own blocklists
+
+`build_blocklist.py OUT.bin [SOURCE ...]` takes any mix of URLs and local files, in any of
+these formats:
+
+- **hosts files** — `0.0.0.0 ads.example.com`
+- **plain domain lists** — one domain per line
+- **AdGuard / Adblock basic rules** — `||ads.example.com^` blocks, `@@||ok.example.com^`
+  removes a domain (e.g. to mirror an AdGuard Home allowlist)
+
+A blocked domain also blocks its subdomains. Rules a DNS hash list can't express (regex,
+wildcards, `$` modifiers, cosmetic `##` rules) are skipped and counted. An `@@` rule only
+un-blocks that exact entry — it can't carve a subdomain out of a blocked parent. If a source
+can't be downloaded the build stops instead of silently producing a smaller list
+(`--allow-missing` to override).
 
 ### WiFi setup (no re-flash needed)
 
