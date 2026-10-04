@@ -123,7 +123,9 @@ The dashboard at **http://c3adblock.local** does it all:
 
 - **Blocklist** — drop a freshly built `blocklist.bin` into *Blocklist → Upload*, or set a
   URL under *Remote auto-update* and the device pulls a prebuilt `blocklist.bin`
-  on a schedule (e.g. a GitHub release asset — update it once, every device fetches it).
+  on a schedule. A fresh default list is rebuilt **every Monday** by GitHub Actions and
+  published at a stable URL, so pasting this once keeps a device current on its own:
+  `https://github.com/M-Abozaid/esp32-c3-adblock/releases/download/blocklist/blocklist.bin`
 - **Firmware** — upload `.pio/build/c3/firmware.bin` under *Firmware → OTA update*; the
   device verifies it and reboots into the new image. Or push over WiFi from the CLI:
   ```bash
