@@ -22,7 +22,10 @@ Flags:
                       appends HDA to those. Refuses to write if HDA yields < HDA_MIN_DOMAINS.
   --protect-file F    read extra playback-protect domains from file F (one per line,
                       '#' comments allowed) and use them INSTEAD of DEFAULT_PROTECT.
-  --no-protect        skip playback-protect filtering entirely (not recommended).
+  --no-protect        skip protect filtering entirely (not recommended).
+  --no-prune          keep subdomains whose parent is already blocked. They are dead
+                      weight -- the firmware's parent-matching never reaches them -- but
+                      this restores the pre-prune blob for A/B comparison.
   --allow-missing     continue when a source cannot be downloaded (default: fail).
 
 Protect (DEFAULT_PROTECT) removes domains that must never be blocked because the firmware
@@ -104,6 +107,7 @@ DEFAULT_PROTECT = [
 ADG = re.compile(r'^(@@)?\|\|([a-z0-9._-]+)\^?(\$.*)?$', re.I)
 
 ALLOW_MISSING = False
+NO_PRUNE = False
 
 def fnv(b: bytes) -> int:
     h = FNV_OFFSET
@@ -157,6 +161,32 @@ def strip_protected(domains: set, protect) -> list:
     return sorted(d for d in domains
                   if is_protected(d, protect) and not is_ad_endpoint(d, protect))
 
+def prune_parent_redundant(domains: set) -> set:
+    """Drop subdomains that a blocked parent already covers.
+
+    The firmware blocks a domain and all of its subdomains and walks up the labels on
+    every query, so a query for `a.b.example.com` whose `example.com` is in the blob is
+    already answered by that parent entry -- the child's own hash is unreachable, i.e.
+    dead weight in flash. On the current source set this is ~9.5% of entries.
+
+    Only exact-parent ancestry counts; a lookalike like `notexample.com` never covers
+    `example.com`.
+    """
+    keep = set()
+    for d in domains:
+        p = d
+        covered = False
+        while '.' in p:
+            p = p.split('.', 1)[1]
+            if '.' not in p:
+                break                     # reached a TLD; nothing above can be a rule
+            if p in domains:
+                covered = True
+                break
+        if not covered:
+            keep.add(d)
+    return keep
+
 def check_required_source(src: str, found: int) -> bool:
     """True if a source yielded enough to be publishable. A list that downloads but
     parses to almost nothing (moved file, HTML error page) is the silent-shrink mode.
@@ -172,10 +202,11 @@ def check_required_source(src: str, found: int) -> bool:
     return True
 
 def main():
-    global ALLOW_MISSING
+    global ALLOW_MISSING, NO_PRUNE
     raw = sys.argv[1:]
     flags = [a for a in raw if a.startswith('--')]
     ALLOW_MISSING = '--allow-missing' in flags
+    NO_PRUNE = '--no-prune' in flags
     if '--no-protect' in flags:
         protect = []
     elif '--protect-file' in flags:
@@ -265,6 +296,17 @@ def main():
         domains -= set(removed_protect)
         shown = ', '.join(removed_protect[:6]) + (' ...' if len(removed_protect) > 6 else '')
         print(f'playback protect : {len(removed_protect)} domain(s) removed -> {shown}', file=sys.stderr)
+
+    # Parent-redundant pruning runs AFTER protection, never before: if a parent were
+    # removed later (by the protect list), any child pruned in its favour would be left
+    # unblocked. Protecting first means each parent kept below really is still blocked,
+    # so dropping the child is a genuine no-op for the firmware's parent-matching lookup.
+    if not NO_PRUNE:
+        before = len(domains)
+        domains = prune_parent_redundant(domains)
+        if before - len(domains):
+            print(f'parent-redundant : {before - len(domains):,} domain(s) dropped '
+                  f'(already covered by a blocked parent)', file=sys.stderr)
 
     hashes = sorted(fnv(d.encode()) for d in domains)
     collisions = len(hashes) - len(set(hashes))

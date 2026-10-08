@@ -125,9 +125,27 @@ land here automatically with nothing to sync:
 python3 tools/build_blocklist.py data/blocklist.bin --with-hda
 ```
 
-Measured output: **~149k entries / ~747 KB**, i.e. ~57 % of the 1.3125 MB LittleFS
+Measured output: **~135k entries / ~676 KB**, i.e. ~51 % of the 1.3125 MB LittleFS
 partition. The weekly GitHub Actions release uses this flag, so the published
 `blocklist.bin` already includes all three.
+
+**Deduplication.** Sources overlap heavily, so the build de-duplicates at three levels:
+
+1. **Normalisation** — lowercase, strip a leading `www.`, `*.`, and any trailing dot, so
+   `ADS.Example.COM`, `www.ads.example.com` and `ads.example.com.` collapse to one entry.
+   `@@` allow-rules are subtracted from the block set.
+2. **Exact duplicates** — the blob holds one 5-byte hash per distinct domain; the build
+   reports a hash-collision count so 40-bit truncation over-blocking stays visible.
+3. **Parent-redundant subdomains** — ~14k entries (9.5 %) removed. The firmware walks up
+   the labels on every query and blocks a domain *and all of its subdomains*, so if
+   `example.com` is blocked, a stored `a.example.com` is unreachable — dead weight in
+   flash. Verified equivalent: over 156k probe domains (every source rule plus random
+   `sub.x.` / `a.b.c.x.` children) the pruned and unpruned blobs return identical answers
+   for every single query.
+
+Pruning runs **after** the protection list, never before: a parent dropped by protection
+would otherwise orphan its children. Pass `--no-prune` to keep the redundant subdomains
+(the blob returns to ~747 KB with no behavioral change) — CI asserts pruning is active.
 
 StevenBlack is deliberately **not** included: it is a generic overseas list that on a
 video-app probe matched only 83 domains (mostly overlapping Hagezi) while costing ~268 KB.

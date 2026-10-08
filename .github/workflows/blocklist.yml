@@ -43,7 +43,11 @@ jobs:
           for src in hagezi anti-AD home-dns-adblock; do
             grep -q "$src" build.log || { echo "missing source in build: $src"; exit 1; }
           done
-          echo "all sources present in build log"
+          # Parent-redundant pruning must actually be running: without it the blob is
+          # ~70 KB larger for zero behavioral difference, so a silent regression to
+          # --no-prune should be loud rather than just a bigger file.
+          grep -q 'parent-redundant' build.log || { echo "pruning did not run"; exit 1; }
+          echo "all sources present, pruning active"
       - name: Publish to the 'blocklist' release
         env:
           GH_TOKEN: ${{ github.token }}

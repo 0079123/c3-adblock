@@ -11,7 +11,8 @@ import unittest
 
 from build_blocklist import (ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS, DEFAULT_PROTECT, HAGEZI_DOMAINS,
                              HASH_BYTES, HDA_DOMAINS, HDA_MIN_DOMAINS, check_required_source,
-                             fnv, is_ad_endpoint, is_protected, strip_protected)
+                             fnv, is_ad_endpoint, is_protected, prune_parent_redundant,
+                             strip_protected)
 
 SCRIPT = pathlib.Path(__file__).with_name('build_blocklist.py')
 
@@ -197,6 +198,49 @@ class BuildBlocklistTests(unittest.TestCase):
             values = [int.from_bytes(data[i:i + HASH_BYTES], 'little')
                       for i in range(0, len(data), HASH_BYTES)]
             self.assertEqual(values, sorted(values), 'firmware binary-searches this blob')
+
+
+class PruneTests(unittest.TestCase):
+    """Parent-redundant pruning must be a no-op for the firmware's lookup."""
+
+    def test_subdomain_covered_by_blocked_parent_is_dropped(self):
+        self.assertEqual(prune_parent_redundant({'example.com', 'a.example.com'}),
+                         {'example.com'})
+        self.assertEqual(prune_parent_redundant({'a.b.example.com', 'b.example.com', 'example.com'}),
+                         {'example.com'})
+
+    def test_lookalike_parent_does_not_cover(self):
+        """`notexample.com` must never be treated as covering `example.com`."""
+        pool = {'example.com', 'notexample.com'}
+        self.assertEqual(prune_parent_redundant(pool), pool)
+        pool2 = {'example.com', 'example.com.evil.net'}
+        self.assertEqual(prune_parent_redundant(pool2), pool2)
+
+    def test_entries_without_a_blocked_parent_survive(self):
+        pool = {'ads.example.com', 'other.org', 'com'}
+        self.assertEqual(prune_parent_redundant(pool), pool)
+
+    def test_protected_ad_endpoint_survives_parent_pruning(self):
+        """The ordering guarantee: protection runs first, so an ad endpoint under a
+        playlist parent keeps its own hash instead of being pruned away."""
+        pool = {'qznovelvod.com', 'v5-reading-ad.qznovelvod.com', 'cdn.qznovelvod.com'}
+        kept = set(pool) - set(strip_protected(pool, DEFAULT_PROTECT))
+        self.assertEqual(kept, {'v5-reading-ad.qznovelvod.com'})
+        self.assertEqual(prune_parent_redundant(kept), {'v5-reading-ad.qznovelvod.com'})
+
+    def test_no_prune_flag_keeps_subdomains(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'domains.txt'
+            source.write_text('example.com\na.example.com\n', encoding='utf-8')
+            pruned = root / 'pruned.bin'
+            kept = root / 'kept.bin'
+
+            build(pruned, source)
+            build(kept, source, flags=('--no-prune',))
+
+            self.assertEqual(len(hashes_of(pruned)), 1)
+            self.assertEqual(len(hashes_of(kept)), 2)
 
 
 class GuardTests(unittest.TestCase):
