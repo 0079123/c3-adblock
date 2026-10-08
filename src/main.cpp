@@ -177,32 +177,70 @@ uint32_t bannedIP[MAX_BAN]; int numBanned = 0;
 // RAM-backed on purpose: a flash write per query would wear the device and block the DNS
 // loop.
 //
-// Aggregated by unique domain rather than kept as a raw event ring. The 96-slot ring looked
-// fine in testing but lost data in practice: one app (Douyin live) issues hundreds of pull-*
-// queries in seconds and overwrote everything else, so a 1511-query session exported 96
-// rows of a single platform. Keying on the domain collapses 1511 queries to the distinct
-// names actually seen (typically a few hundred), keeps every one, and the hit count is more
-// useful for analysis than duplicate rows.
-// Sized per target: the entry table is static (.bss), and the classic ESP32 has far less
-// usable DRAM than the C3 -- 256 entries overflowed dram0_0_seg by ~3 KB on esp32dev while
-// the c3 build was fine. 192 still holds a full session's distinct domains for either board.
+// Grouped by ROOT domain, not by full hostname. Two earlier designs both failed the same
+// way: a 96-slot raw ring, then a table keyed on the full hostname. Either way one chatty
+// app filled it and pushed out every other platform -- Douyin live alone emits hundreds of
+// DISTINCT pull-<codec>-<node>.douyincdn.com names, so a 96-row export was 96 unique
+// hostnames of a single app and the Tencent/Mango/Youku traffic was gone. Keying on the
+// registrable domain collapses those hundreds into one row per platform, so a multi-app
+// session keeps every app visible.
+//
+// Pass a filter (e.g. qq.com) to switch the key back to the full hostname: that is the
+// drill-down mode used to copy exact ad domains into data/custom-domains.txt.
+//
+// Sized per target: the table is static (.bss) and the classic ESP32 has far less usable
+// DRAM than the C3 -- 256 full-hostname entries overflowed dram0_0_seg on esp32dev.
 #if CONFIG_IDF_TARGET_ESP32C3
-static const int CAPTURE_SIZE = 256;        // C3: roomier SRAM
+static const int CAPTURE_SIZE = 192;        // C3: roomier SRAM
 #else
-static const int CAPTURE_SIZE = 192;        // classic ESP32: DRAM constrained
+static const int CAPTURE_SIZE = 128;        // classic ESP32: DRAM constrained
 #endif
-static const int CAPTURE_DOMAIN_MAX = 80;   // longest name kept intact (DNS labels cap at 253)
+static const int CAPTURE_DOMAIN_MAX = 80;   // longest full name kept (as an example)
+static const int CAPTURE_ROOT_MAX = 48;     // longest root domain
+
+// Multi-part public suffixes we must not split, or "douyin.com.cn" would group as "com.cn".
+static const char* const MULTI_TLD[] = {
+  "com.cn","net.cn","org.cn","gov.cn","edu.cn","ac.cn","co.uk","org.uk","ac.uk",
+  "com.br","co.jp","or.kr","co.kr","com.au","net.au","co.in","com.tw","com.hk",NULL };
+
+// Returns the start offset of the registrable domain within d (last two labels, or three
+// when the tail is a known multi-part suffix).
+static int capRootOffset(const char* d) {
+  int n = strlen(d);
+  int dots = 0, last = n, prev = n;
+  for (int i = n; i >= 0; i--) {
+    if (i == 0 || d[i - 1] == '.') {
+      dots++;
+      if (dots == 1) last = i;
+      else if (dots == 2) { prev = i; break; }
+    }
+  }
+  if (dots < 2) return 0;
+  for (int k = 0; MULTI_TLD[k]; k++) {
+    int len = strlen(MULTI_TLD[k]);
+    if (n - last == len && strcmp(d + last, MULTI_TLD[k]) == 0) {
+      // tail is e.g. "com.cn": include one more label
+      int dots2 = 0, prev2 = prev;
+      for (int i = prev; i >= 0; i--)
+        if (i == 0 || d[i - 1] == '.') { if (++dots2 == 2) { prev2 = i; break; } }
+      return prev2;
+    }
+  }
+  return prev;
+}
+
 struct CapEntry {
-  char     domain[CAPTURE_DOMAIN_MAX];
-  uint32_t ip;            // last client that asked
+  char     root[CAPTURE_ROOT_MAX];      // grouping key (or full name while filtering)
+  char     example[CAPTURE_DOMAIN_MAX]; // one full hostname seen under this root
+  uint32_t ip;
   uint32_t firstMs, lastMs;
-  uint16_t hits;          // times this domain was seen, saturating at 65535
+  uint16_t hits;                        // queries collapsed into this row
   uint8_t  qtype;
   bool     used, blocked;
 };
 static CapEntry capBuf[CAPTURE_SIZE];
 static uint32_t capQueries = 0;            // total queries recorded since the last clear
-static bool     capOverflow = false;       // set when a distinct domain had nowhere to go
+static bool     capOverflow = false;       // set when a new group had nowhere to go
 static bool     capOn = false;
 static String   capFilter;                 // substring filter; empty records everything
 
@@ -210,20 +248,25 @@ static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool block
   if (!capOn) return;
   if (capFilter.length() && String(domain).indexOf(capFilter) < 0) return;
   capQueries++;
-  for (int i = 0; i < CAPTURE_SIZE; i++) {              // already seen? just count it
+  // Filtering means the user is drilling into one platform and wants exact names; an empty
+  // filter means they want the whole picture, so group by root to stay inside the table.
+  const char* key = capFilter.length() ? domain : domain + capRootOffset(domain);
+  for (int i = 0; i < CAPTURE_SIZE; i++) {
     CapEntry& e = capBuf[i];
-    if (e.used && strcmp(e.domain, domain) == 0) {
+    if (e.used && strcmp(e.root, key) == 0) {
       if (e.hits < 0xFFFF) e.hits++;
       e.ip = ip; e.qtype = qtype; e.blocked = blocked; e.lastMs = millis();
+      if (strcmp(e.example, domain) != 0 && e.hits <= 2)   // keep a representative name
+        strncpy(e.example, domain, CAPTURE_DOMAIN_MAX - 1);
       return;
     }
   }
-  for (int i = 0; i < CAPTURE_SIZE; i++) {              // new domain: claim a free slot
+  for (int i = 0; i < CAPTURE_SIZE; i++) {
     CapEntry& e = capBuf[i];
     if (e.used) continue;
     e.used = true;
-    strncpy(e.domain, domain, CAPTURE_DOMAIN_MAX - 1);
-    e.domain[CAPTURE_DOMAIN_MAX - 1] = 0;
+    strncpy(e.root, key, CAPTURE_ROOT_MAX - 1);      e.root[CAPTURE_ROOT_MAX - 1] = 0;
+    strncpy(e.example, domain, CAPTURE_DOMAIN_MAX - 1); e.example[CAPTURE_DOMAIN_MAX - 1] = 0;
     e.ip = ip; e.qtype = qtype; e.blocked = blocked;
     e.hits = 1; e.firstMs = e.lastMs = millis();
     return;
@@ -1166,7 +1209,8 @@ void setup() {
       const CapEntry& e = capBuf[capOrder[k]];
       if (k) j += ",";
       IPAddress ip(e.ip);
-      j += "{\"d\":\"" + jesc(String(e.domain)) + "\",\"hits\":" + String(e.hits) +
+      j += "{\"d\":\"" + jesc(String(e.root)) + "\",\"ex\":\"" + jesc(String(e.example)) +
+           "\",\"hits\":" + String(e.hits) +
            ",\"ip\":\"" + ip.toString() + "\",\"q\":" + String(e.qtype) +
            ",\"b\":" + String(e.blocked ? "true" : "false") +
            ",\"first\":" + String(e.firstMs) + ",\"last\":" + String(e.lastMs) + "}";
@@ -1175,13 +1219,14 @@ void setup() {
     web.send(200, "application/json", j);
   });
   web.on("/capture.csv", [&capSorted, &capOrder]() {
-    // One row per distinct domain, most-queried first, for a spreadsheet or a bug report.
+    // One row per group (root domain, or full hostname while filtering), most-queried first.
     int n = capSorted(&capOrder);
-    String csv = "rank,domain,hits,blocked,client,qtype,first_ms,last_ms\r\n";
+    String csv = "rank,domain,example,hits,blocked,client,qtype,first_ms,last_ms\r\n";
     for (int k = 0; k < n; k++) {
       const CapEntry& e = capBuf[capOrder[k]];
       IPAddress ip(e.ip);
-      csv += String(k + 1) + ",\"" + String(e.domain) + "\"," + String(e.hits) + "," +
+      csv += String(k + 1) + ",\"" + String(e.root) + "\",\"" + String(e.example) +
+             "\"," + String(e.hits) + "," +
              String(e.blocked ? 1 : 0) + "," + ip.toString() + "," + String(e.qtype) +
              "," + String(e.firstMs) + "," + String(e.lastMs) + "\r\n";
     }

@@ -252,7 +252,7 @@ function capRender(j){
   var es=j.entries||[];
   capTbl.style.display=es.length?'':'none';
   capTbl.tBodies[0].innerHTML = es.length? es.map(function(e){
-    return '<tr><td>'+esc(e.d)+'</td><td style="color:#8b949e">'+fmt(e.hits||1)+'</td>'+
+    return '<tr><td>'+esc(e.d)+'<div style="color:#8b949e;font-size:11px">'+esc(e.ex||'')+'</div></td><td style="color:#8b949e">'+fmt(e.hits||1)+'</td>'+
       '<td style="color:'+(e.b?'#f85149':'#3fb950')+'">'+
       (e.b?t('capBlocked'):t('capAllowed'))+'</td><td style="color:#8b949e">'+esc(e.ip)+'</td></tr>';
   }).join('') : ('<tr><td colspan=4 style=color:#8b949e>'+t('capEmpty')+'</td></tr>');
