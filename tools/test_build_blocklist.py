@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 from build_blocklist import (ADBLOCKFILTERS_DOMAINS, ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS,
-                             CUSTOM_DOMAINS, DEFAULT_PROTECT, DEFAULT_SOURCES, HAGEZI_DOMAINS,
+                             CUSTOM_DOMAINS, DEFAULT_PROTECT, DEFAULT_SOURCES, FLUX_DOMAINS, HAGEZI_DOMAINS,
                              HASH_BYTES, HDA_DOMAINS, HDA_MIN_DOMAINS, check_required_source,
                              fnv, is_ad_endpoint, is_protected, prune_parent_redundant,
                              strip_protected)
@@ -324,6 +324,36 @@ class GuardTests(unittest.TestCase):
                            check=True, capture_output=True, text=True)
             got = hashes_of(out)
             self.assertIn(fnv(b'tad.qq.com'), got, 'custom entry missing from blob')
+
+    def test_flux_list_is_tracked_and_in_the_build(self):
+        """data/flux-blocklist-adguard.txt is the user's capture-verified list; it must be
+        a build source and must be committed, or CI's fresh checkout silently drops it."""
+        self.assertIn(FLUX_DOMAINS, DEFAULT_SOURCES)
+        self.assertTrue(os.path.exists(FLUX_DOMAINS), f'missing {FLUX_DOMAINS}')
+        r = subprocess.run(['git', 'check-ignore', FLUX_DOMAINS], cwd=ROOT,
+                           capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0, 'flux list must NOT be gitignored')
+
+    def test_flux_allow_rules_unblock_but_cannot_pierce_a_parent(self):
+        """@@ removes the exact entry only. Pin both halves of that contract: the user's
+        allow lines do un-block their own names, and a name still covered by a blocked
+        parent stays blocked (the documented limitation, easy to misread as a bug)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            src = root / 'flux.txt'
+            src.write_text('@@||id6.me^\n||ad.example.com^\n@@||sub.ad.example.com^\n',
+                           encoding='utf-8')
+            out = root / 'blocklist.bin'
+            build(out, src, flags=('--no-protect',))
+            got = hashes_of(out)
+            self.assertNotIn(fnv(b'id6.me'), got, '@@ should drop the exact entry')
+            self.assertIn(fnv(b'ad.example.com'), got)
+            self.assertNotIn(fnv(b'sub.ad.example.com'), got,
+                             'the @@ line removes only itself...')
+            # ...but the firmware would still block it through the parent, so the @@ line is
+            # NOT a carve-out. Assert the parent survives, which is the part that surprises.
+            self.assertIn(fnv(b'ad.example.com'), got,
+                          'parent stays blocked -- @@ cannot carve a child out of it')
 
     def test_default_sources_use_the_domain_variant_of_adblockfilters(self):
         """The headline adblockfilters.txt is URL-level filtering; only the domain-list

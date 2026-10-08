@@ -1,0 +1,57 @@
+! ============================================
+! Flux 抓包核实拦截清单（2026-10-09）
+! 格式：AdGuard Home / AdGuard 自定义过滤规则
+! 共 17 条拦截 + 5 条误伤放行
+! ============================================
+
+! —— 开屏/内联广告漏网（联网逐一核实）——
+! 芒果TV CAID 设备追踪（抓包 183 次，最大漏网）
+||caid.data.mgtv.com^
+! 易量跃动聚合广告 SDK（整域，纯广告公司）
+||innoads.cn^
+! AdSmile 广告监测/归因（整域，墨迹天气/彩视在用）
+||datads.cn^
+! 广推科技 流量变现（整域，彩云天气开屏在用）
+||guangtuikeji.com^
+! 引力引擎 买量归因平台（整域）
+||gravity-engine.com^
+! ADX 广告日志域（整域）
+||9zas5.com^
+! Apple 广告 SDK / Search Ads 归因（拦了只断广告归因）
+||iadsdk.apple.com^
+
+! —— 广告素材/埋点（精确子域，禁止扩大到父域）——
+! 优量汇广告素材 CDN（勿拦 gtimg.cn）
+||pgdt.gtimg.cn^
+! 阿里系推广埋点资源（勿拦 alicdn.com）
+||dorangesource.alicdn.com^
+
+! —— PCDN（非广告，偷上行带宽，拦截不影响播放）——
+! B站/抖音 PCDN
+||qrstuvwxyzab.com^
+! 疑似 PCDN/动态调度，证据不足，求稳删掉此行
+||yingt.asia^
+
+! —— 防复发补强（抓包已出现厂商的姊妹域，纯广告业务，整域安全）——
+! 穿山甲 API 备用域（snssdk.com 的孪生域）
+||isnssdk.com^
+! AdMaster 广告监测（秒针同门）
+||admaster.com.cn^
+! 热云数据 买量归因
+||trackingio.com^
+! 聚效 MediaV（阿里妈妈旗下 DSP）
+||mediav.com^
+! Sigmob 广告聚合平台
+||sigmob.cn^
+! AppsFlyer 海外归因（家里不用海外 App 就保留）
+||appsflyer.com^
+
+! —— 误伤放行（家里有人用一键登录/刷抖音/拼多多就保留）——
+! 三大运营商本机号码认证（一键登录）
+@@||id6.me^
+@@||auth.wosms.cn^
+@@||enrichgw.10010.com^
+! 抖音图片 CDN（封面/头像）
+@@||p11.douyinpic.com^
+! 拼多多图片 CDN
+@@||images.pinduoduo.com^

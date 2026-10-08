@@ -32,19 +32,9 @@ tdm.td.qq.com
 # 广告联盟接口
 afp.qiyi.com
 
-# ---- 独立广告平台 / 聚合SDK（真机抓包发现，上游规则集未覆盖）----
-# AdGain「云算」广告变现 SDK（官网 datads.cn 自述：连接100+直投预算、200+APP 的广告聚合）
-datads.cn
-# In-App 聚合广告平台（官网 innoads.cn 自述：聚合多家广告SDK，支持开屏/插屏/激励/Banner/信息流）
-innoads.cn
-# ADX 广告交易竞价日志
-adxlog.9zas5.com
-# 广告推客（移动广告投放/推广平台）
-guangtuikeji.com
-# 腾讯广点通广告素材 CDN（pgdt = 图片广点通；注意 gtimg.cn 本身是腾讯图片域，只加这个子域）
-pgdt.gtimg.cn
-# 芒果TV 广告标识 CAID（China Advertising ID）上报
-caid.data.mgtv.com
+# ---- 以下广告平台已移交 data/flux-blocklist-adguard.txt 维护（单一来源）----
+# datads.cn / innoads.cn / 9zas5.com / guangtuikeji.com / pgdt.gtimg.cn / caid.data.mgtv.com
+# 那批条目在 flux 文件里带有逐条出处注释，改那边即可，勿在此重复。
 
 # ---- 芒果TV / Mango TV ----
 # 说明：芒果的广告域 da.hunantv.com、mobaliyun.res.mgtv.com 已由上游规则集覆盖。

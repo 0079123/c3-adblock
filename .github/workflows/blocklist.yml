@@ -22,6 +22,7 @@ on:
     paths:
       - 'tools/build_blocklist.py'
       - 'data/custom-domains.txt'
+      - 'data/flux-blocklist-adguard.txt'
       - '.github/workflows/blocklist.yml'
 
 permissions:

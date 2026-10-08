@@ -67,6 +67,12 @@ ADBLOCKFILTERS_DOMAINS = 'https://raw.githubusercontent.com/217heidai/adblockfil
 # after confirming them from a device capture -- see the notes inside the file.
 CUSTOM_DOMAINS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'custom-domains.txt'))
+# Second curated list: flux-blocklist-adguard.txt, written from device captures with each
+# entry annotated (source, why it is safe, and where an entry must NOT be widened to its
+# parent). Kept as its own file so the annotations survive and it can be edited on its own.
+# It also carries @@ allow rules -- see the caveat documented next to the allowlist output.
+FLUX_DOMAINS = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'flux-blocklist-adguard.txt'))
 
 # anti-AD is the largest CN source (~108k domains) and carries the web/app-ad surface.
 # If it silently truncates, folding in Hagezi still leaves a plausible-looking total, so
@@ -78,6 +84,7 @@ DEFAULT_SOURCES = [
     ANTIAD_DOMAINS,             # anti-AD: CN ads/trackers (web + app)
     ADBLOCKFILTERS_DOMAINS,     # 217heidai lite domain list: Youku/iQiyi/MangoTV ad hosts
     CUSTOM_DOMAINS,             # data/custom-domains.txt: hand-picked additions
+    FLUX_DOMAINS,               # data/flux-blocklist-adguard.txt: capture-verified list
 ]
 
 # Appended by --with-hda AND always included by the weekly CI release (see DEFAULT_SOURCES
