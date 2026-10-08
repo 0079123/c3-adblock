@@ -83,7 +83,7 @@ String updateStatus = "never";
 // WiFi provisioning (captive portal)
 Preferences prefs;
 DNSServer   dnsPortal;
-String      portalOpts;             // <option> list of scanned networks, built once at portal start
+String      portalNets;             // JSON array of scanned networks, refreshed on demand
 
 // blocking pause (Pi-hole-style "disable for a while")
 bool     blockingOn = true;
@@ -601,22 +601,33 @@ static bool connectWiFi() {
 }
 
 static void handlePortalRoot() {
-  // Bilingual (中文 / English) setup page. Language is applied client-side so the same
-  // response serves both; the choice is remembered in localStorage. Technical terms
-  // (WiFi, SSID, IP, DNS) stay in English since that is what the OS dialogs show too.
+  // Bilingual (中文 / English) setup page. Networks are scanned at portal start and rendered
+  // as a tappable list with signal strength -- the previous <datalist> needed the user to
+  // tap the field and often showed no dropdown on phones, so it read as "type it yourself".
+  // A manual-entry field stays available for hidden SSIDs.
   String html =
     "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
     "<title>C3 AdBlock 设置 / setup</title>"
-    "<body style='font:16px system-ui,sans-serif;max-width:420px;margin:36px auto;padding:0 16px;background:#0d1117;color:#c9d1d9'>"
+    "<body style='font:16px system-ui,sans-serif;max-width:460px;margin:24px auto;padding:0 16px;background:#0d1117;color:#c9d1d9'>"
     "<div style='display:flex;justify-content:space-between;align-items:center'>"
     "<h2 style='margin:0'>&#128737; C3 AdBlock</h2>"
     "<button id=lang onclick=toggleLang() style='background:#21262d;color:#c9d1d9;border:1px solid #30363d;"
     "border-radius:5px;padding:5px 10px;cursor:pointer;font-size:13px'>English</button></div>"
-    "<p id=sub style='color:#8b949e'></p>"
-    "<form method=POST action=/wifisave>"
-    "<input list=nets name=s id=ssid required style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;"
+    "<p id=sub style='color:#8b949e;margin:8px 0 14px'></p>"
+    "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px'>"
+    "<b id=netsTitle></b>"
+    "<button type=button id=rescan onclick=rescan() style='background:#21262d;color:#c9d1d9;border:1px solid "
+    "#30363d;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:13px'></button></div>"
+    "<div id=netlist style='border:1px solid #30363d;border-radius:8px;overflow:hidden;margin-bottom:6px'></div>"
+    "<p id=noNets style='color:#8b949e;font-size:13px;display:none'></p>"
+    "<p><button type=button id=manualBtn onclick=toggleManual() style='background:none;border:0;color:#58a6ff;"
+    "cursor:pointer;padding:0;font-size:13px'></button></p>"
+    "<div id=manualBox style='display:none'>"
+    "<input id=ssidIn placeholder='SSID' style='width:100%;box-sizing:border-box;padding:11px;margin:4px 0;"
     "border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
-    "<datalist id=nets>" + portalOpts + "</datalist>"
+    "</div>"
+    "<form method=POST action=/wifisave id=pwForm>"
+    "<input type=hidden name=s id=ssidVal>"
     "<input name=p id=pw type=password style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;"
     "border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
     "<button id=go style='width:100%;padding:12px;margin-top:8px;border-radius:6px;border:0;background:#3fb950;"
@@ -624,17 +635,49 @@ static void handlePortalRoot() {
     "</form>"
     "<p id=hint style='color:#8b949e;font-size:13px;margin-top:16px'></p>"
     "<script>"
-    "var T={zh:{sub:'选择你的 WiFi 并输入密码，设备将重启并接入该网络。',"
-    "ssid:'WiFi 名称 (SSID)',pw:'WiFi 密码',go:'连接',"
+    "var NETS=" + portalNets + ";"
+    "var chosen=null;"
+    "var T={zh:{sub:'选择一个 WiFi，输入密码后设备会重启并接入。',nets:'扫描到的网络',rescan:'重新扫描',"
+    "scanning:'扫描中…',none:'没有扫描到网络 —— 请靠近路由器后点「重新扫描」，或用下方手动输入。',"
+    "manual:'SSID 隐藏了？手动输入',manualHide:'收起手动输入',ssid:'WiFi 名称 (SSID)',pw:'WiFi 密码',go:'连接',"
+    "pick:'请先选择一个 WiFi',nopw:'请输入密码（或留空如果是开放网络）',open:'开放',"
     "hint:'连上后，在浏览器打开 http://c3adblock.local 进入管理面板 (Dashboard)。',btn:'English'},"
-    "en:{sub:'Pick your network and enter its password. The device restarts and joins it.',"
-    "ssid:'WiFi name (SSID)',pw:'WiFi password',go:'Connect',"
+    "en:{sub:'Pick a WiFi network and enter its password. The device will reboot and join it.',nets:'Networks found',rescan:'Rescan',"
+    "scanning:'Scanning...',none:'No networks found -- move closer to the router and tap Rescan, or enter it manually below.',"
+    "manual:'SSID hidden? Enter manually',manualHide:'Hide manual entry',ssid:'WiFi name (SSID)',pw:'WiFi password',go:'Connect',"
+    "pick:'Pick a network first',nopw:'Enter the password (leave empty if open)',open:'Open',"
     "hint:'Once connected, open http://c3adblock.local in a browser for the dashboard.',btn:'中文'}};"
-    "function apply(l){var t=T[l];sub.textContent=t.sub;ssid.placeholder=t.ssid;pw.placeholder=t.pw;"
-    "go.textContent=t.go;hint.textContent=t.hint;document.getElementById('lang').textContent=t.btn;"
-    "document.documentElement.lang=(l==='zh'?'zh-CN':'en');try{localStorage.setItem('c3lang',l)}catch(e){}}"
+    "function bars(r){var n=r>=-55?4:r>=-67?3:r>=-75?2:1;return '▮'.repeat(n)+'▯'.repeat(4-n)}"
+    "function render(){"
+    "netlist.innerHTML=NETS.map(function(w,i){"
+    "return '<div class=net data-i='+i+' style=\"padding:11px 13px;border-bottom:1px solid #21262d;cursor:pointer;"
+    "display:flex;justify-content:space-between;align-items:center\">'+"
+    "'<span>'+esc(w.s)+(w.o?' <span style=\"color:#8b949e;font-size:12px\">'+T[LANG].open+'</span>':' &#128274;')+"
+    "'</span><span style=\"color:#8b949e;font-size:12px\">'+bars(w.r)+'</span></div>'}).join('');"
+    "noNets.style.display=NETS.length?'none':'block';}"
+    "function esc(s){return String(s).replace(/[&<>\"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]})}"
+    "function pick(i){chosen=NETS[i].s;ssidVal.value=chosen;ssidIn.value=chosen;"
+    "Array.prototype.forEach.call(netlist.children,function(el){"
+    "el.style.background=(+el.dataset.i===i)?'#1f6feb33':''});"
+    "pw.focus();}"
+    "netlist.addEventListener('click',function(e){var el=e.target.closest('.net');if(el)pick(+el.dataset.i)});"
+    "ssidIn.addEventListener('input',function(){ssidVal.value=ssidIn.value;chosen=ssidIn.value});"
+    "function toggleManual(){var b=manualBox.style.display==='none';manualBox.style.display=b?'block':'none';"
+    "manualBtn.textContent=b?T[LANG].manualHide:T[LANG].manual;if(b)ssidIn.focus()}"
+    "function rescan(){netsTitle.textContent=T[LANG].scanning;"
+    "fetch('/rescan').then(function(r){return r.json()}).then(function(j){NETS=j;render();apply(LANG)})"
+    ".catch(function(){apply(LANG)})}"
+    "var LANG='en';"
+    "function apply(l){LANG=l;var t=T[l];sub.textContent=t.sub;netsTitle.textContent=t.nets;"
+    "document.getElementById('rescan').textContent=t.rescan;noNets.textContent=t.none;pw.placeholder=t.pw;ssidIn.placeholder=t.ssid;"
+    "go.textContent=t.go;hint.textContent=t.hint;manualBtn.textContent=manualBox.style.display==='none'?t.manual:t.manualHide;"
+    "document.getElementById('lang').textContent=t.btn;"
+    "document.documentElement.lang=(l==='zh'?'zh-CN':'en');try{localStorage.setItem('c3lang',l)}catch(e){}render();}"
     "function cur(){try{return localStorage.getItem('c3lang')}catch(e){return null}}"
     "function toggleLang(){apply(cur()==='zh'?'en':'zh')}"
+    "document.getElementById('pwForm').addEventListener('submit',function(e){"
+    "ssidVal.value=chosen||ssidIn.value.trim();"
+    "if(!ssidVal.value){e.preventDefault();alert(T[LANG].pick);return}});"
     "apply(cur()||((navigator.language||'en').toLowerCase().indexOf('zh')===0?'zh':'en'));"
     "</script></body>";
   web.send(200, "text/html", html);
@@ -656,10 +699,24 @@ static void handleWifiSave() {
   delay(900); ESP.restart();
 }
 // Never returns — blocks in the portal loop until creds are saved (then reboots).
-static void startConfigPortal() {
+// Scan results are captured as JSON once, while still in STA mode: ESP32 switches channel
+// to scan, which briefly drops AP clients, so re-scanning on demand is avoided by default
+// (the page has an explicit "rescan" button for when a network was missed).
+static void scanNetworksToJson() {
   int n = WiFi.scanNetworks();                 // scan while still in STA mode (no APSTA)
-  portalOpts = "";
-  for (int i = 0; i < n && i < 15; i++) portalOpts += "<option value='" + htmlEscape(WiFi.SSID(i)) + "'>";
+  portalNets = "[";
+  for (int i = 0; i < n && i < 20; i++) {
+    if (i) portalNets += ",";
+    portalNets += "{\"s\":\"" + jesc(WiFi.SSID(i)) + "\"";
+    portalNets += ",\"r\":" + String(WiFi.RSSI(i));
+    // WIFI_AUTH_OPEN == 0; anything else needs a password (WEP/WPA/WPA2/WPA3/enterprise)
+    portalNets += ",\"o\":" + String(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? 1 : 0);
+    portalNets += "}";
+  }
+  portalNets += "]";
+}
+static void startConfigPortal() {
+  scanNetworksToJson();
   uint8_t mac[6]; WiFi.macAddress(mac);
   char ap[24]; snprintf(ap, sizeof(ap), "C3-AdBlock-%02X%02X", mac[4], mac[5]);
   WiFi.mode(WIFI_AP); WiFi.softAP(ap);
@@ -667,6 +724,9 @@ static void startConfigPortal() {
   dnsPortal.start(53, "*", apIP);              // catch-all -> phones pop the captive portal
   web.on("/", handlePortalRoot);
   web.on("/wifisave", HTTP_POST, handleWifiSave);
+  // Re-scan on demand. Accepted trade-off: scanning switches channel, so AP clients may see
+  // a brief blip; the page warns and reloads afterwards.
+  web.on("/rescan", []() { scanNetworksToJson(); web.send(200, "application/json", portalNets); });
   web.onNotFound(handlePortalRoot);            // any captive-portal probe -> the form
   web.begin();
   Serial.printf("\n[setup] No WiFi. Join open network \"%s\" and a setup page pops up (or http://%s)\n",
