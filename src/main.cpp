@@ -183,7 +183,14 @@ uint32_t bannedIP[MAX_BAN]; int numBanned = 0;
 // rows of a single platform. Keying on the domain collapses 1511 queries to the distinct
 // names actually seen (typically a few hundred), keeps every one, and the hit count is more
 // useful for analysis than duplicate rows.
-static const int CAPTURE_SIZE = 256;        // distinct domains retained
+// Sized per target: the entry table is static (.bss), and the classic ESP32 has far less
+// usable DRAM than the C3 -- 256 entries overflowed dram0_0_seg by ~3 KB on esp32dev while
+// the c3 build was fine. 192 still holds a full session's distinct domains for either board.
+#if CONFIG_IDF_TARGET_ESP32C3
+static const int CAPTURE_SIZE = 256;        // C3: roomier SRAM
+#else
+static const int CAPTURE_SIZE = 192;        // classic ESP32: DRAM constrained
+#endif
 static const int CAPTURE_DOMAIN_MAX = 80;   // longest name kept intact (DNS labels cap at 253)
 struct CapEntry {
   char     domain[CAPTURE_DOMAIN_MAX];
