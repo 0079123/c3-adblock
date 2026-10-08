@@ -741,10 +741,37 @@ static bool fetchBlocklist(String url) {
   if (!f) { http.end(); updateStatus = "fs open failed"; return false; }
   WiFiClient* stream = http.getStreamPtr();
   uint8_t b[1024]; size_t total = 0; uint32_t idle = millis();
+  // Yield to DNS and the dashboard every few chunks.
+  //
+  // This loop used to run to completion without ever returning to loop(), so a 672 KB
+  // download froze the device: no DNS replies and no web responses for the whole transfer
+  // (measured: the box stopped answering ping-adjacent HTTP and DNS until it finished).
+  // Because the blocklist fetch runs ~20 s after every boot, the device appeared to "hang
+  // for a minute then recover" -- it was blocking, not crashing.
+  //
+  // handleDns() is called directly rather than loop(), since we are already inside it.
+  uint32_t yielded = 0;
   while (http.connected() && (len < 0 || (int)total < len)) {
     size_t avail = stream->available();
-    if (avail) { int n = stream->readBytes(b, avail > sizeof(b) ? sizeof(b) : avail); if (n > 0) { f.write(b, n); total += n; idle = millis(); } }
-    else { if (millis() - idle > fetchIdleMs) break; delay(2); }
+    if (avail) {
+      int n = stream->readBytes(b, avail > sizeof(b) ? sizeof(b) : avail);
+      if (n > 0) { f.write(b, n); total += n; idle = millis(); }
+      // Every ~8 KB written, service pending DNS queries and HTTP requests once. Small
+      // enough that the socket stays busy, frequent enough that clients aren't stalled.
+      if ((total - yielded) >= 8192) {
+        yielded = total;
+        handleDns();
+        web.handleClient();
+        delay(1);
+      }
+    } else {
+      // No data ready: instead of a bare delay(2), process DNS/web first so an idle wait
+      // does not also become a stall.
+      handleDns();
+      web.handleClient();
+      if (millis() - idle > fetchIdleMs) break;
+      delay(2);
+    }
   }
   f.close(); http.end();
   // Reject a short transfer here rather than letting commitNewBlocklist decide: a severed

@@ -170,15 +170,31 @@ function setCreds(u,pw){
   }catch(e){}
 }
 function api(url,opts){
-  if(needCreds())return Promise.reject(new Error('no creds'));
+  // If credentials are missing, ask once and then retry the same request. Previously the
+  // first click was swallowed: showLogin() collected them but api() rejected anyway, so the
+  // user had to click a second time for no visible reason.
+  if(!credHeaders().Authorization){
+    showLogin();
+    if(!credHeaders().Authorization)return Promise.reject(new Error('login cancelled'));
+  }
   return fetch(url,Object.assign({headers:credHeaders()},opts||{})).then(function(r){
-    if(r.status===401){alert(t('needAuth'));throw new Error('auth');}
+    // 401 = wrong or missing credentials, not a generic failure. Ask again and retry once
+    // so a mistyped password is recoverable without reloading the page.
+    if(r.status===401){
+      showLogin();
+      if(credHeaders().Authorization)return api(url,opts);
+      alert(t('needAuth'));throw new Error('auth');
+    }
     if(!r.ok){throw new Error('http '+r.status);}
     return r;
   }).catch(function(e){
-    if(String(e.message)!=='auth')banner(t('actFailed')+': '+e.message);
+    if(String(e.message)==='auth'){alert(t('needAuth'));}
+    else if(String(e.message)!=='login cancelled'){banner(t('actFailed')+': '+e.message);}
     throw e;
   });
+}
+function needCreds(){
+  return !credHeaders().Authorization;
 }
 function banner(msg){
   var b=document.getElementById('errbar');
