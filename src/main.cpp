@@ -21,8 +21,14 @@
                        // have been provisioned via the captive portal (copy secrets.example.h)
 
 // ---- config ----
+// Upstream resolver. Quad9 used to be the default, but it is overseas: measured from a CN
+// network it answers in ~226 ms, versus ~3 ms for the local router and ~27-44 ms for
+// domestic public resolvers. Every *allowed* query is forwarded, and a client typically
+// asks A and AAAA back to back, so that latency lands on every page load twice over.
+// Default is now a domestic resolver; override in secrets.h to use your router or another
+// (223.5.5.5 AliDNS, 119.29.29.29 DNSPod, 114.114.114.114).
 #ifndef UPSTREAM_IP
-#define UPSTREAM_IP 9, 9, 9, 9                    // Quad9
+#define UPSTREAM_IP 223, 5, 5, 5                  // AliDNS (domestic, ~44 ms from CN)
 #endif
 #ifndef UPSTREAM_PORT
 #define UPSTREAM_PORT 53
@@ -56,6 +62,91 @@ WebServer web(80);
 File blocklist;
 uint32_t numHashes = 0, totalBlocked = 0, totalAllowed = 0;
 uint8_t buf[1536];   // fits any non-fragmented UDP reply (EDNS answers can exceed 512)
+
+// ---------- upstream answer cache ----------
+// Every allowed query used to be forwarded, and forwarding blocks inside handleDns() for up
+// to 1 s, so a page load (browser opens several connections, each asking A then AAAA) paid
+// the upstream round trip over and over. A small cache makes repeats instant and removes
+// them from the serialized forwarding path entirely.
+//
+// Keyed on the full question section (qname+qtype+qclass) rather than just the name, so an
+// A and an AAAA for the same host are distinct entries. Only the response body AFTER the
+// 12-byte header is stored: the transaction id must be per-request, so it is patched back
+// in when answering. TTL comes from the upstream record, capped so a long TTL cannot pin a
+// stale address, with a floor so a 0-TTL answer is not effectively uncached.
+static const int DNS_CACHE_SIZE = 64;              // power of 2
+static const uint32_t DNS_TTL_MIN_MS = 5UL * 1000;
+static const uint32_t DNS_TTL_MAX_MS = 10UL * 60 * 1000;
+struct DnsCacheEntry {
+  bool     used;
+  uint32_t expires;
+  uint16_t bodyLen;                                // bytes of the cached response body
+  uint8_t  key[128 + 4];                           // question section (<=128 B name + qtype/qclass)
+  uint8_t  keyLen;
+  uint8_t  body[512];                              // response without its 12-byte header
+};
+static DnsCacheEntry dnsCache[DNS_CACHE_SIZE];
+static uint32_t dnsCacheHits = 0, dnsCacheMiss = 0;   // surfaced in /stats.json
+
+// Look up a cached answer for this question; patches the caller's transaction id into buf.
+// Returns the full response length, or 0 on miss.
+static int dnsCacheGet(const uint8_t* key, size_t keyLen) {
+  if (keyLen == 0 || keyLen > sizeof(dnsCache[0].key)) return 0;
+  const uint32_t now = millis();
+  // Direct-mapped: hash the question bytes so the same name+type always lands in one slot.
+  uint32_t h = 2166136261u;
+  for (size_t i = 0; i < keyLen; i++) { h ^= key[i]; h *= 16777619u; }
+  DnsCacheEntry& e = dnsCache[h & (DNS_CACHE_SIZE - 1)];
+  if (!e.used || (int32_t)(now - e.expires) >= 0) { dnsCacheMiss++; return 0; }
+  if (e.keyLen != keyLen || memcmp(e.key, key, keyLen) != 0) { dnsCacheMiss++; return 0; }
+  memcpy(buf + 12, e.body, e.bodyLen);
+  dnsCacheHits++;
+  return 12 + e.bodyLen;
+}
+
+// Store a response (buf[0..n)) under the given question key, if it fits.
+static void dnsCachePut(const uint8_t* key, size_t keyLen, int n) {
+  if (keyLen == 0 || keyLen > sizeof(dnsCache[0].key)) return;
+  if (n <= 12 || n > 12 + (int)sizeof(dnsCache[0].body)) return;
+  // Only cache ordinary successes: skip truncated replies (TC) and error rcodes, which may
+  // be transient or need retrying against another resolver.
+  const uint8_t flags = buf[3];
+  if (flags & 0x02) return;                        // TC: truncated, retry over TCP wasn't done
+  if ((flags & 0x0F) != 0) return;                 // rcode != NOERROR
+  if (buf[6] || buf[7]) { /* ancount>0: normal */ } else if (buf[8] || buf[9]) { return; }
+
+  // Shortest TTL across the answer records, so we never outlive the upstream's own bound.
+  uint32_t ttl = DNS_TTL_MAX_MS;
+  int i = 12 + keyLen;                             // skip header + question
+  const int ancount = (buf[6] << 8) | buf[7];
+  for (int a = 0; a < ancount && i + 12 <= n; a++) {
+    // Walk (and skip) the owner name. A compression pointer occupies exactly 2 bytes with
+    // no terminator; only the inline-label form ends with a NUL byte. Consuming a terminator
+    // after a pointer would shift every field by one and mis-read the type/TTL -- which is
+    // exactly what an earlier version did.
+    if (buf[i] & 0xC0) i += 2;
+    else { while (i < n && buf[i] != 0) i += buf[i] + 1; i += 1; }   // +1 for the terminator
+    if (i + 10 > n) break;
+    const uint16_t rtype  = (buf[i] << 8) | buf[i + 1];
+    const uint16_t rclass = (buf[i + 2] << 8) | buf[i + 3];
+    const uint32_t rttl   = ((uint32_t)buf[i + 4] << 24) | ((uint32_t)buf[i + 5] << 16) |
+                            ((uint32_t)buf[i + 6] << 8) | buf[i + 7];
+    const uint16_t rdlen  = (buf[i + 8] << 8) | buf[i + 9];
+    i += 10 + rdlen;
+    if (rtype == 1 && rclass == 1) { const uint32_t ms = rttl * 1000UL;
+      if (ms < ttl) ttl = ms; }
+  }
+  if (ttl < DNS_TTL_MIN_MS) ttl = DNS_TTL_MIN_MS;
+  if (ttl > DNS_TTL_MAX_MS) ttl = DNS_TTL_MAX_MS;
+
+  uint32_t h = 2166136261u;
+  for (size_t k = 0; k < keyLen; k++) { h ^= key[k]; h *= 16777619u; }
+  DnsCacheEntry& e = dnsCache[h & (DNS_CACHE_SIZE - 1)];
+  memcpy(e.key, key, keyLen); e.keyLen = (uint8_t)keyLen;
+  memcpy(e.body, buf + 12, n - 12); e.bodyLen = (uint16_t)(n - 12);
+  e.expires = millis() + ttl;
+  e.used = true;
+}
 
 // first-level flash index (sorted sample hashes) + small direct-mapped cache
 static uint8_t blIndex[INDEX_ENTRIES][HASH_BYTES];
@@ -374,7 +465,21 @@ static bool handleDns() {
     bool blocked = ban || (blockingOn && dl && numHashes && isBlocked(domain));
     int rlen;
     if (blocked) { rlen = buildBlocked(qend, qtype); totalBlocked++; if (c) c->blocked++; }
-    else         { rlen = forwardUpstream(qlen, qend);     totalAllowed++; if (c) c->allowed++; }
+    else {
+      // Cache key = the question section (qname+qtype+qclass), so A and AAAA differ. A
+      // hit answers without touching the network -- important because forwarding blocks
+      // this loop for up to 1 s.
+      const uint8_t* qkey = buf + 12;
+      const size_t qkeyLen = (qend > 12) ? (size_t)(qend - 12) : 0;
+      const uint8_t cid0 = buf[0], cid1 = buf[1];
+      rlen = dnsCacheGet(qkey, qkeyLen);
+      if (rlen > 0) { buf[0] = cid0; buf[1] = cid1; }     // restore the client's txid
+      else {
+        rlen = forwardUpstream(qlen, qend);
+        if (rlen > 0) { dnsCachePut(qkey, qkeyLen, rlen); }
+      }
+      totalAllowed++; if (c) c->allowed++;
+    }
     if (rlen > 0) { dnsServer.beginPacket(cip, cport); dnsServer.write(buf, rlen); dnsServer.endPacket(); }
   }
   return did;
@@ -413,7 +518,8 @@ static void handleStats() {
              ",\"domains\":" + numHashes + ",\"rssi\":" + WiFi.RSSI() + ",\"temp\":" + String(temperatureRead(), 1) +
              ",\"heap\":" + ESP.getFreeHeap() + ",\"uptime\":\"" + ut + "\"" +
              ",\"upurl\":\"" + jesc(updateUrl) + "\",\"upiv\":" + updateIntervalH + ",\"upstat\":\"" + jesc(updateStatus) + "\""
-             + ",\"upcustom\":" + (updateUrlCustom ? "true" : "false") +
+             + ",\"upcustom\":" + (updateUrlCustom ? "true" : "false")
+             + ",\"cachehits\":" + dnsCacheHits + ",\"cachemiss\":" + dnsCacheMiss +
              ",\"blocking\":" + (blockingOn ? "true" : "false") +
              ",\"resumeIn\":" + (uint32_t)(!blockingOn && resumeAt ? (resumeAt - millis()) / 1000 : 0) +
              ",\"defcreds\":" + ((strcmp(WEB_PASS, "CHANGE_ME_WEB_PASSWORD") == 0 || strcmp(OTA_PASS, "CHANGE_ME_OTA_PASSWORD") == 0) ? "true" : "false") +
