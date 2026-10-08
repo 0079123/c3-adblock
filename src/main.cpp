@@ -15,6 +15,7 @@
 #include <ArduinoOTA.h>        // network firmware flashing (pio run over wifi)
 #include <DNSServer.h>         // captive-portal catch-all DNS
 #include <Preferences.h>       // NVS store for provisioned WiFi creds
+#include <esp_system.h>    // esp_reset_reason(): surface why the device rebooted
 #include "lwip/etharp.h"
 #include "lwip/netif.h"
 #include "secrets.h"   // WIFI_SSID / WIFI_PASS — used only as a FALLBACK if no creds
@@ -246,6 +247,39 @@ static uint32_t capQueries = 0;            // total queries recorded since the l
 static bool     capOverflow = false;       // set when a new group had nowhere to go
 static bool     capOn = false;
 static String   capFilter;                 // substring filter; empty records everything
+
+// Capture settings live in RAM, so any reboot -- crash, brownout, watchdog, OTA -- silently
+// switched capture off and emptied the table, which looked like "the capture stopped on its
+// own". Persisting just the two settings costs one tiny flash write per user action (not per
+// query, so no wear concern) and capture resumes itself after a reboot. The table itself is
+// still RAM-only by design; the reset reason below makes the lost data explainable.
+static void saveCaptureCfg() {
+  File f = LittleFS.open("/cap.cfg", "w"); if (!f) return;
+  f.println(capOn ? "1" : "0"); f.println(capFilter); f.close();
+}
+static void loadCaptureCfg() {
+  File f = LittleFS.open("/cap.cfg", "r"); if (!f) return;
+  String on = f.readStringUntil('\n'); on.trim();
+  capFilter = f.readStringUntil('\n');
+  f.close();
+  capOn = (on == "1");
+  if (capOn) Serial.println("[capture] resumed from saved settings after reboot");
+}
+
+// Why did the last boot happen? Without this a reboot is invisible and the emptied capture
+// looks like a software bug rather than a restart.
+static const char* resetReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return "power-on";
+    case ESP_RST_BROWNOUT: return "brownout (weak USB supply)";
+    case ESP_RST_PANIC:    return "crash";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT: return "watchdog";
+    case ESP_RST_SW:       return "software restart";
+    case ESP_RST_DEEPSLEEP:return "deep-sleep";
+    default:               return "other/unknown";
+  }
+}
 
 static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool blocked) {
   if (!capOn) return;
@@ -657,6 +691,7 @@ static void handleStats() {
              ",\"heap\":" + ESP.getFreeHeap() + ",\"uptime\":\"" + ut + "\"" +
              ",\"upurl\":\"" + jesc(updateUrl) + "\",\"upiv\":" + updateIntervalH + ",\"upstat\":\"" + jesc(updateStatus) + "\""
              + ",\"upcustom\":" + (updateUrlCustom ? "true" : "false")
+             + ",\"resetreason\":\"" + jesc(String(resetReason())) + "\""
              + ",\"cachehits\":" + dnsCacheHits + ",\"cachemiss\":" + dnsCacheMiss +
              ",\"blocking\":" + (blockingOn ? "true" : "false") +
              ",\"resumeIn\":" + (uint32_t)(!blockingOn && resumeAt ? (resumeAt - millis()) / 1000 : 0) +
@@ -1120,7 +1155,8 @@ void setup() {
     Serial.printf("blocklist: %u domains\n", numHashes);
     buildFlashIndex();
   }
-  loadCustom(); loadBanned(); loadUpdateCfg();
+  loadCustom(); loadBanned(); loadUpdateCfg(); loadCaptureCfg();
+  Serial.printf("[boot] reset reason: %s\n", resetReason());
   Serial.printf("custom: %d, banned: %d\n", numCustom, numBanned);
 
   // Hold BOOT at power-on to wipe saved WiFi and force the setup portal.
@@ -1205,6 +1241,7 @@ void setup() {
     if (web.hasArg("on") && web.arg("on") != "0" && !web.hasArg("f")) capFilter = "";
     if (web.hasArg("f")) capFilter = web.arg("f");
     if (web.hasArg("on")) capOn = web.arg("on") != "0";
+    saveCaptureCfg();
     web.send(200, "application/json", String("{\"on\":") + (capOn ? "true" : "false") +
               ",\"filter\":\"" + jesc(capFilter) + "\"}");
   });

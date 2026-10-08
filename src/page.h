@@ -54,6 +54,7 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 <a id=capCsv href="/capture.csv" download><button id=btnCapCsv type=button></button></a>
 <span id=capState style="font-size:12px;color:#8b949e"></span></div>
 <div id=capHint style="color:#8b949e;font-size:12px;margin-bottom:8px"></div>
+<div id=capBoot style="display:none;color:#f0883e;font-size:12px;margin-bottom:6px"></div>
 <table id=capTbl style="display:none"><thead><tr><th id=thCapDomain></th><th id=thCapHits></th><th id=thCapResult></th><th id=thCapClient></th></tr></thead><tbody></tbody></table>
 <h2 id=hWifi></h2>
 <div style=margin-bottom:18px><button id=btnForget onclick="forgetWifi()"></button></div>
@@ -78,7 +79,7 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  hCap:'抓包 — DNS 查询记录 (CAPTURE)',
  btnCapStart:'开始抓包',btnCapStop:'停止抓包',btnCapApply:'应用过滤',btnCapClear:'清空',btnCapCsv:'下载 CSV',
  thCapDomain:'域名',thCapHits:'次数',thCapResult:'结果',thCapClient:'客户端',
- capQueries:'次查询',capDistinct:'个域名',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录'
+ capQueries:'次查询',capDistinct:'个域名',capReboot:'设备曾重启，抓包记录已清空。原因: ',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录'
 
  capOn:'● 抓包中',capOff:'○ 未抓包',capEmpty:'暂无记录 —— 点「开始抓包」，然后在 App 里复现广告',
  capHint:'点「开始抓包」后复现漏网的广告（开始时会【自动清空过滤】，确保抓到全部请求，之后再按需过滤）；下方列表和 CSV 会显示设备收到的全部查询，以及每一条是否被拦截。过滤框可只记录含指定关键词的域名（如 iqiyi）。',
@@ -106,7 +107,7 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  hCap:'CAPTURE -- DNS query log',
  btnCapStart:'Start capture',btnCapStop:'Stop capture',btnCapApply:'Apply filter',btnCapClear:'Clear',btnCapCsv:'Download CSV',
  thCapDomain:'Domain',thCapHits:'Hits',thCapResult:'Result',thCapClient:'Client',
- capQueries:'queries',capDistinct:'domains',capFiltering:'filtering: ',capOverflow:'domain table full; new domains dropped',
+ capQueries:'queries',capDistinct:'domains',capReboot:'device rebooted and the capture table was cleared. cause: ',capFiltering:'filtering: ',capOverflow:'domain table full; new domains dropped',
  
  capOn:'● capturing',capOff:'○ idle',capEmpty:'no entries yet -- press Start capture, then reproduce the ad in the app',
  capHint:'Press Start capture, then reproduce the ad (this CLEARS the filter so everything is captured);  The list and CSV show every query the device received and whether each was blocked. The filter box records only domains containing a keyword (e.g. iqiyi).',
@@ -262,6 +263,14 @@ function capRender(j){
   }).join('') : ('<tr><td colspan=4 style=color:#8b949e>'+t('capEmpty')+'</td></tr>');
 }
 function capLoad(){fetch('/capture.json').then(function(r){return r.json()}).then(capRender).catch(function(){})}
+// A reboot empties the capture table; naming the cause turns "it stopped on its own"
+// into an explainable event. Only shown when the reset was not a normal power-on.
+function capBoot(r){
+  if(!r||r==='power-on'||r==='software restart')return;
+  var b=document.getElementById('capBoot');
+  if(!b)return;
+  b.textContent='\u26a0 '+t('capReboot')+r;b.style.display='block';
+}
 function capToggle(){
   api('/capture?on='+(capIsOn?'0':'1')).then(function(){capLoad()}).catch(function(){});
 }
