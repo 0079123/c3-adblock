@@ -585,13 +585,6 @@ static void handleStats() {
 // drive-by case without needing TLS, cookies, or a token endpoint.
 static const char* CSRF_HEADER = "X-Requested-With";
 static const char* CSRF_VALUE  = "c3-adblock";
-// Password-only guard for read-only pages. See the call site for why CSRF is not required.
-static bool requireAuthPage() {
-  if (web.authenticate(WEB_USER, WEB_PASS)) return true;
-  web.requestAuthentication();
-  return false;
-}
-
 static bool requireAuth() {
   if (web.header(CSRF_HEADER) != CSRF_VALUE) { web.send(403, "text/plain", "missing CSRF header"); return false; }
   if (web.authenticate(WEB_USER, WEB_PASS)) return true;
@@ -1026,13 +1019,14 @@ void setup() {
 
   dnsServer.begin(DNS_PORT); upstreamCli.begin(0);
   { const char* hdrs[] = { CSRF_HEADER }; web.collectHeaders(hdrs, 1); }  // needed for requireAuth()'s CSRF check
-  // Pages use password-only auth: a browser navigating to a URL cannot attach the custom
-  // CSRF header, so requireAuth() (CSRF + password) would 403 the page forever. CSRF exists
-  // to stop a *state-changing* request forged by another origin; a plain GET of the
-  // dashboard or its stats changes nothing and is already protected by the password. The
-  // mutating endpoints keep using requireAuth().
-  web.on("/", []() { if (!requireAuthPage()) return; web.send_P(200, "text/html", PAGE); });
-  web.on("/stats.json", []() { if (!requireAuthPage()) return; handleStats(); });
+  // Pages must NOT call web.requestAuthentication() (requireAuthPage), because browsers
+  // handle that prompt inconsistently -- some never show it, leaving users staring at a
+  // blank/401 page. Being public keeps the dashboard always reachable; the password
+  // question is moved into the page itself (see the login bar in src/page.h), which then
+  // supplies credentials to the mutating endpoints. CSRF protection is unchanged there:
+  // only state-changing endpoints require it, and they keep requireAuth().
+  web.on("/", []() { web.send_P(200, "text/html", PAGE); });
+  web.on("/stats.json", handleStats);
   web.on("/ban", handleBan);
   web.on("/addblock", []() { if (!requireAuth()) return; addCustom(web.arg("d")); web.send(200, "text/plain", "ok"); });
   web.on("/unblock", []() { if (!requireAuth()) return; removeCustom(web.arg("d")); web.send(200, "text/plain", "ok"); });
