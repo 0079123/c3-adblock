@@ -1097,6 +1097,10 @@ void setup() {
   web.on("/capture", []() {
     if (!requireAuth()) return;
     if (web.hasArg("clear")) { capTotal = 0; capOn = false; memset(capBuf, 0, sizeof(capBuf)); }
+    // Starting a capture resets the filter unless one was given in the same request: a
+    // leftover filter silently narrows the log, so the next capture looks like "this app
+    // only asks for these domains" when it actually asks for far more. Default = record all.
+    if (web.hasArg("on") && web.arg("on") != "0" && !web.hasArg("f")) capFilter = "";
     if (web.hasArg("f")) capFilter = web.arg("f");
     if (web.hasArg("on")) capOn = web.arg("on") != "0";
     web.send(200, "application/json", String("{\"on\":") + (capOn ? "true" : "false") +

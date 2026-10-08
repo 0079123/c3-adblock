@@ -48,7 +48,7 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 <h2 id=hCap></h2>
 <div style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">
 <button id=btnCapToggle onclick=capToggle()></button>
-<input id=capFilter placeholder="iqiyi" size=12 style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px">
+<input id=capFilter placeholder="(留空=抓全部)" size=12 style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px">
 <button id=btnCapApply onclick=capApplyFilter()></button>
 <button id=btnCapClear onclick=capClear()></button>
 <a id=capCsv href="/capture.csv" download><button id=btnCapCsv type=button></button></a>
@@ -79,7 +79,7 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  btnCapStart:'开始抓包',btnCapStop:'停止抓包',btnCapApply:'应用过滤',btnCapClear:'清空',btnCapCsv:'下载 CSV',
  thCapDomain:'域名',thCapResult:'结果',thCapClient:'客户端',
  capOn:'● 抓包中',capOff:'○ 未抓包',capEmpty:'暂无记录 —— 点「开始抓包」，然后在 App 里复现广告',
- capHint:'点「开始抓包」后在爱奇艺/腾讯视频里复现漏网的广告；下方列表和 CSV 会显示设备收到的全部查询，以及每一条是否被拦截。过滤框可只记录含指定关键词的域名（如 iqiyi）。',
+ capHint:'点「开始抓包」后复现漏网的广告（开始时会【自动清空过滤】，确保抓到全部请求，之后再按需过滤）；下方列表和 CSV 会显示设备收到的全部查询，以及每一条是否被拦截。过滤框可只记录含指定关键词的域名（如 iqiyi）。',
  capBlocked:'已拦截',capAllowed:'放行',
  forgetConfirm:'确定要清除已保存的 WiFi 并重启进入配网页面吗？',
  updFetching:'拉取中…',updUploading:'上传中',updUpdated:'已更新',updFailed:'上传失败',
@@ -105,7 +105,7 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  btnCapStart:'Start capture',btnCapStop:'Stop capture',btnCapApply:'Apply filter',btnCapClear:'Clear',btnCapCsv:'Download CSV',
  thCapDomain:'Domain',thCapResult:'Result',thCapClient:'Client',
  capOn:'● capturing',capOff:'○ idle',capEmpty:'no entries yet -- press Start capture, then reproduce the ad in the app',
- capHint:'Press Start capture, then reproduce the missing ad in iQiyi/Tencent Video. The list and CSV show every query the device received and whether each was blocked. The filter box records only domains containing a keyword (e.g. iqiyi).',
+ capHint:'Press Start capture, then reproduce the ad (this CLEARS the filter so everything is captured);  The list and CSV show every query the device received and whether each was blocked. The filter box records only domains containing a keyword (e.g. iqiyi).',
  capBlocked:'BLOCKED',capAllowed:'allowed',
  forgetConfirm:'Forget saved WiFi and reboot into the setup portal?',
  updFetching:'fetching...',updUploading:'uploading',updUpdated:'updated',updFailed:'upload failed',
@@ -134,7 +134,8 @@ function applyLang(l){lang=l;try{localStorage.setItem('c3lang',l)}catch(e){}
  thCapDomain.textContent=t('thCapDomain');thCapResult.textContent=t('thCapResult');thCapClient.textContent=t('thCapClient');
  credwarnT.textContent=t('credWarnTitle');credwarnB.textContent=t('credWarnBody');
  credbarMsg.textContent=t('credMsg');btnLogin.textContent=t('btnLogin');
- credbar.style.display=(credHeaders().Authorization)?'none':'block';
+ // 登录条默认隐藏：页面本身免密，只有点动作按钮时才提示（见 api()）。
+ credbar.style.display='none';
  load();}
 function toggleLang(){applyLang(lang==='zh'?'en':'zh')}
 function fmt(n){return n.toLocaleString()}
@@ -173,10 +174,15 @@ function api(url,opts){
   // If credentials are missing, ask once and then retry the same request. Previously the
   // first click was swallowed: showLogin() collected them but api() rejected anyway, so the
   // user had to click a second time for no visible reason.
+  // Credentials are only demanded when an action is actually clicked -- the page itself
+  // loads without any login, and the bar stays hidden until then.
+  var cb=document.getElementById('credbar');
   if(!credHeaders().Authorization){
+    if(cb)cb.style.display='block';          // 说明为什么要密码
     showLogin();
+    if(credHeaders().Authorization&&cb)cb.style.display='none';   // 登录成功即隐藏
     if(!credHeaders().Authorization)return Promise.reject(new Error('login cancelled'));
-  }
+  } else if(cb) cb.style.display='none';
   return fetch(url,Object.assign({headers:credHeaders()},opts||{})).then(function(r){
     // 401 = wrong or missing credentials, not a generic failure. Ask again and retry once
     // so a mistyped password is recoverable without reloading the page.
@@ -234,7 +240,8 @@ function fetchNow(){ustat.textContent=t('updFetching');api('/fetchnow').then(r=>
 var capIsOn=false;
 function capRender(j){
   capIsOn=j.on;
-  capState.textContent=(j.on?t('capOn'):t('capOff'))+'  '+(j.total||0)+' 条';
+  capState.textContent=(j.on?t('capOn'):t('capOff'))+'  '+(j.total||0)+' 条'
+    +(j.filter?('  &#8212; 过滤中: '+esc(j.filter)):'');
   btnCapToggle.textContent=j.on?t('btnCapStop'):t('btnCapStart');
   btnCapToggle.style.background=j.on?'#8b2c2c':'#21262d';
   var es=j.entries||[];
