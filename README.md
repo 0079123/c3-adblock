@@ -117,17 +117,23 @@ The default build targets **CN networks**, with video/App ads as the primary goa
 | [Hagezi Light](https://github.com/hagezi/dns-blocklists) | Broad ads/trackers/malware; strongest general list, covers Kuaishou/Bilibili/iQiyi/Youku |
 | [anti-AD](https://github.com/privacy-protection-tools/anti-AD) | CN web + App ads (`pos.baidu.com`, `cnzz.com`, iQiyi/Youku/MangoTV ad hosts) |
 | [home-dns-adblock](https://github.com/abclq/home-dns-adblock) | CN App ads from real device DNS logs (Douyin/Fanqie/Hongguo/Xiaohongshu) |
+| [217heidai/adblockfilters](https://github.com/217heidai/adblockfilters) | `adblockdomainlite.txt` only — adds Youku/iQiyi/MangoTV ad hosts, Weibo/Taobao trackers |
 
-All three are pulled **live from stable raw URLs** on every build, so upstream rule updates
+All four are pulled **live from stable raw URLs** on every build, so upstream rule updates
 land here automatically with nothing to sync:
 
 ```bash
 python3 tools/build_blocklist.py data/blocklist.bin --with-hda
 ```
 
-Measured output: **~135k entries / ~676 KB**, i.e. ~51 % of the 1.3125 MB LittleFS
-partition. The weekly GitHub Actions release uses this flag, so the published
-`blocklist.bin` already includes all three.
+Measured output: **~136k entries / ~682 KB**, i.e. ~50 % of the LittleFS partition
+(`0x150000` = 1,376,256 B, so ~139k entries of headroom remain). The weekly GitHub Actions
+release uses this flag, so the published `blocklist.bin` already includes all four.
+
+Use 217heidai's **`adblockdomainlite.txt`**, not the repo's headline
+`adblockfilters.txt`: the latter is URL-level filtering (paths, `*` wildcards and
+`$` modifiers) which a DNS hash list cannot express — only ~520 of its 106k lines are
+usable, versus 5.5k domains in the domain-list variant.
 
 **Deduplication.** Sources overlap heavily, so the build de-duplicates at three levels:
 

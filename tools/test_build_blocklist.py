@@ -9,7 +9,8 @@ import sys
 import tempfile
 import unittest
 
-from build_blocklist import (ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS, DEFAULT_PROTECT, HAGEZI_DOMAINS,
+from build_blocklist import (ADBLOCKFILTERS_DOMAINS, ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS,
+                             DEFAULT_PROTECT, DEFAULT_SOURCES, HAGEZI_DOMAINS,
                              HASH_BYTES, HDA_DOMAINS, HDA_MIN_DOMAINS, check_required_source,
                              fnv, is_ad_endpoint, is_protected, prune_parent_redundant,
                              strip_protected)
@@ -295,6 +296,20 @@ class GuardTests(unittest.TestCase):
         for resolver in ('doh.pub', 'dns.alidns.com'):
             self.assertTrue(is_protected(resolver, DEFAULT_PROTECT),
                             f'{resolver} must never be blocked (whole LAN loses DNS)')
+
+    def test_wechat_resolvers_are_protected(self):
+        """217heidai's list blocks WeChat's resolver endpoints as separate entries. All three
+        spellings must stay unblocked -- WeChat is too central to risk for ad-blocking."""
+        for endpoint in ('dns.weixin.qq.com', 'aedns.weixin.qq.com', 'dns.weixin.qq.com.cn'):
+            self.assertTrue(is_protected(endpoint, DEFAULT_PROTECT),
+                            f'{endpoint} must never be blocked')
+
+    def test_default_sources_use_the_domain_variant_of_adblockfilters(self):
+        """The headline adblockfilters.txt is URL-level filtering; only the domain-list
+        variant is expressible as DNS hashes. Guard against someone swapping it back."""
+        self.assertIn(ADBLOCKFILTERS_DOMAINS, DEFAULT_SOURCES)
+        self.assertIn('adblockdomainlite.txt', ADBLOCKFILTERS_DOMAINS)
+        self.assertNotIn('adblockfilters.txt', ADBLOCKFILTERS_DOMAINS)
 
     def test_protect_matches_exact_and_subdomains_only(self):
         protect = ['qznovelvod.com']

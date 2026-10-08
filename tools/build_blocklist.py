@@ -49,12 +49,18 @@ U64 = (1 << 64) - 1
 # Hagezi) while costing ~268 KB of the 1.31 MB filesystem. Removing it buys the headroom
 # anti-AD needs, and anti-AD covers the web/app-ad surface StevenBlack was carrying.
 #
-# Measured on this source set (5-byte hashes, playback-protect applied):
-#   Hagezi Light + home-dns-adblock + anti-AD -> ~149k entries / ~747 KB / 57% of LittleFS
+# Measured on this source set (5-byte hashes, protect applied, parent-pruning on):
+#   Hagezi Light + anti-AD + 217heidai lite + home-dns-adblock
+#     -> ~136k entries / ~682 KB / ~50% of the 0x150000 (1,376,256 B) LittleFS partition
 # Coverage gains vs the old StevenBlack+Hagezi set (video): iQiyi 19->61, Youku 21->88,
 # MangoTV 3->55, Douyin 305->377, Kuaishou 71->101; (web/app) Baidu 99->329, Taobao 63->130.
 HAGEZI_DOMAINS = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt'
 ANTIAD_DOMAINS = 'https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/master/anti-ad-domains.txt'
+# 217heidai's *domain* variant (not the default adblockfilters.txt, which is URL-level
+# filtering: paths, wildcards and $modifiers that a DNS hash list cannot express -- only
+# ~520 of its 106k lines are usable here). The lite domain list adds ~1.2k entries after
+# dedup, incl. Youku/iQiyi/MangoTV ad hosts and dns.weixin.qq.com (see DEFAULT_PROTECT).
+ADBLOCKFILTERS_DOMAINS = 'https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblockdomainlite.txt'
 
 # anti-AD is the largest CN source (~108k domains) and carries the web/app-ad surface.
 # If it silently truncates, folding in Hagezi still leaves a plausible-looking total, so
@@ -62,8 +68,9 @@ ANTIAD_DOMAINS = 'https://raw.githubusercontent.com/privacy-protection-tools/ant
 ANTIAD_MIN_DOMAINS = 60000
 
 DEFAULT_SOURCES = [
-    HAGEZI_DOMAINS,   # Hagezi Light (wildcard = domain + subdomains)
-    ANTIAD_DOMAINS,   # anti-AD: CN ads/trackers (web + app)
+    HAGEZI_DOMAINS,             # Hagezi Light (wildcard = domain + subdomains)
+    ANTIAD_DOMAINS,             # anti-AD: CN ads/trackers (web + app)
+    ADBLOCKFILTERS_DOMAINS,     # 217heidai lite domain list: Youku/iQiyi/MangoTV ad hosts
 ]
 
 # Appended by --with-hda AND always included by the weekly CI release (see DEFAULT_SOURCES
@@ -101,6 +108,13 @@ DEFAULT_PROTECT = [
     # it takes the whole LAN offline. home-dns-adblock ships both; keep them unblocked.
     'dns.alidns.com',      # AliDNS DoH endpoint
     'doh.pub',             # Tencent DoH endpoint (also dot.pub over HTTPS)
+    # WeChat's own resolver endpoints. 217heidai's list blocks these deliberately (to stop
+    # WeChat side-stepping DNS filtering), but WeChat is too central to risk breaking for an
+    # ad-blocking gain. All three spellings appear in that list as separate entries, so
+    # protecting only dns.weixin.qq.com would still leave the other two blocked.
+    'dns.weixin.qq.com',
+    'aedns.weixin.qq.com',
+    'dns.weixin.qq.com.cn',
 ]
 
 # ||domain^  or  @@||domain^  optionally followed by $modifiers
@@ -328,11 +342,11 @@ def main():
     print(f'collisions       : {collisions}  (domains sharing a hash -> over-block)')
     print(f'flash blob       : {size:,} bytes  ({size/1024/1024:.2f} MB)  -> {out}')
     print(f'lookup           : ~{math.ceil(math.log2(max(n,2)))} reads/query')
-    # Dual-OTA layout gives LittleFS 1.3125 MB; the firmware rejects anything that is not a
-    # 5-byte multiple, and CI additionally caps the size at 1.3 MB. Warn early so an
-    # over-large source set is obvious here instead of only in the release job.
+    # partitions.csv gives LittleFS 0x150000 = 1,376,256 bytes. CI caps the blob at 1.3 MB
+    # to leave headroom, so warn here too rather than only failing in the release job. The
+    # firmware itself only rejects a blob whose size is not a multiple of 5.
     if size > 1300000:
-        print(f'WARNING: blob exceeds the 1.3 MB CI limit (dual-OTA LittleFS is 1.3125 MB)',
+        print(f'WARNING: blob exceeds the 1.3 MB CI limit (LittleFS partition is 1,376,256 B)',
               file=sys.stderr)
 
 if __name__ == '__main__':

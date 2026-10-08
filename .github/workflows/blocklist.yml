@@ -36,11 +36,11 @@ jobs:
           echo "size=$size bytes"
           test $((size % 5)) -eq 0                  # whole 40-bit entries
           test "$size" -gt 250000                   # >50k entries, catches a silently shrunk list
-          test "$size" -lt 1300000                  # fits the dual-OTA filesystem partition
+          test "$size" -lt 1300000                  # LittleFS is 0x150000 = 1,376,256 B; keep headroom
           # Every source must actually show up in the build. A moved/renamed upstream file
           # already fails the build, but this catches a parse regression that still lands a
           # plausible total size (Hagezi alone is ~57k, enough to mask a missing CN source).
-          for src in hagezi anti-AD home-dns-adblock; do
+          for src in hagezi anti-AD adblockfilters home-dns-adblock; do
             grep -q "$src" build.log || { echo "missing source in build: $src"; exit 1; }
           done
           # Parent-redundant pruning must actually be running: without it the blob is
