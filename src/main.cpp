@@ -36,6 +36,20 @@ static const int INDEX_ENTRIES = 4096;   // 20 KB first-level flash index
 static const int CACHE_SIZE = 256;       // must be power of 2
 static const int MAX_RANGE = 256;        // max hashes per index bucket (fine up to ~1M hashes; flash holds far fewer)
 
+// Sanity floor for anything that replaces the live blocklist. The published list is ~134k
+// entries (~670 KB); 20k entries (~100 KB) is comfortably below any legitimate build while
+// still rejecting a truncated transfer, an HTML error page, or a stray small file.
+static const int MIN_BLOCKLIST_ENTRIES = 20000;
+
+// Upper bound on a plausible list: the LittleFS partition is 0x150000. Used to tell a real
+// Content-Length apart from the arduino-esp32 sentinels CONTENT_LENGTH_UNKNOWN /
+// CONTENT_LENGTH_NOT_SET, which arrive as huge size_t values rather than 0.
+static const size_t MAX_BLOCKLIST_BYTES = 0x150000;
+
+// Expected byte length of the pending /blocklist.new, or 0 when the sender didn't declare
+// one. Set by the fetcher and the uploader, checked by commitNewBlocklist().
+static size_t expectedBlocklistBytes = 0;
+
 // ---- globals ----
 WiFiUDP dnsServer, upstreamCli;
 WebServer web(80);
@@ -213,14 +227,29 @@ static void getMac(uint32_t ip, uint8_t* mac) {
   for (struct netif* nif = netif_list; nif; nif = nif->next)
     if (etharp_find_addr(nif, &ipa, &eth, &ipret) >= 0 && eth) { memcpy(mac, eth->addr, 6); return; }
 }
+// Reuse a slot rather than refusing to track the client. clients[] used to only ever grow,
+// so after MAX_CLIENTS distinct IPs (guest devices, phones rotating their MAC, DHCP lease
+// churn) every later client returned nullptr -- invisible in the dashboard and impossible
+// to ban, since /ban needs a non-null Dev*. Evict the least-recently-seen *unbanned* entry
+// so a ban can never be silently dropped; if every slot is banned, keep the newest ban
+// instead of clobbering it.
+static Dev* allocClientSlot() {
+  if (numClients < MAX_CLIENTS) return &clients[numClients++];
+  int victim = -1;
+  for (int i = 0; i < numClients; i++) {
+    if (clients[i].banned) continue;
+    if (victim < 0 || (int32_t)(clients[i].lastSeen - clients[victim].lastSeen) < 0) victim = i;
+  }
+  if (victim < 0) return nullptr;                   // all slots banned -> leave them alone
+  return &clients[victim];
+}
+
 static Dev* getClient(uint32_t ip) {
   for (int i = 0; i < numClients; i++) if (clients[i].ip == ip) { clients[i].lastSeen = millis(); return &clients[i]; }
-  if (numClients < MAX_CLIENTS) {
-    Dev* c = &clients[numClients++];
-    c->ip = ip; c->blocked = c->allowed = 0; c->lastSeen = millis(); c->banned = isBannedIP(ip); c->label = "";
-    getMac(ip, c->mac); return c;
-  }
-  return nullptr;
+  Dev* c = allocClientSlot();
+  if (!c) return nullptr;
+  c->ip = ip; c->blocked = c->allowed = 0; c->lastSeen = millis(); c->banned = isBannedIP(ip); c->label = "";
+  getMac(ip, c->mac); return c;
 }
 
 // ---------- DNS ----------
@@ -363,25 +392,45 @@ static void handleBan() {
 }
 
 // ---------- blocklist swap (shared by upload + remote fetch) ----------
-// The partition holds one list, so we free the old one before writing the new.
-// While swapping, numHashes=0 -> device fail-opens (forwards, no blocking).
+// The partition only holds one list, so the live file is removed before /blocklist.new
+// is renamed into place. Call order matters: fetch/upload into /blocklist.new FIRST,
+// then commit. An aborted transfer therefore leaves the existing list untouched --
+// fail-safe (keep blocking with the old list) instead of fail-open (block nothing).
 static void reopenBlocklist() {
   blocklist = LittleFS.open(BLOCKLIST_PATH, "r");
   numHashes = blocklist ? blocklist.size() / HASH_BYTES : 0;
   buildFlashIndex();
 }
-static void beginBlocklistSwap() {
+static void discardPendingBlocklist() {             // aborted transfer -> drop the partial
   if (blocklist) blocklist.close();
-  numHashes = 0;
-  LittleFS.remove(BLOCKLIST_PATH);
   LittleFS.remove("/blocklist.new");
+  reopenBlocklist();                                // keep serving the live list
 }
 static bool commitNewBlocklist() {                  // /blocklist.new -> live (validated)
   File f = LittleFS.open("/blocklist.new", "r");
   size_t sz = f ? f.size() : 0; if (f) f.close();
-  bool ok = sz > 0 && (sz % HASH_BYTES) == 0;       // sorted hash blob -> 5-byte multiple
-  if (ok) LittleFS.rename("/blocklist.new", BLOCKLIST_PATH);
-  else    LittleFS.remove("/blocklist.new");
+  // A truncated download is still a multiple of 5 roughly 20% of the time, so the old
+  // check (sz % 5 == 0) happily installed a half-length list -- sorted-hash lookups kept
+  // working, so the missing tail failed silently. Callers also pass the expected size
+  // (HTTP Content-Length, or the multipart upload length) and we require an exact match,
+  // plus a floor so a tiny/garbage file can never replace a real list.
+  bool ok = sz >= (size_t)HASH_BYTES * MIN_BLOCKLIST_ENTRIES && (sz % HASH_BYTES) == 0;
+  if (ok && expectedBlocklistBytes && sz != expectedBlocklistBytes) {
+    Serial.printf("[blocklist] size mismatch: got %u, expected %u\n",
+                  (unsigned)sz, (unsigned)expectedBlocklistBytes);
+    ok = false;
+  }
+  if (ok) {
+    if (blocklist) blocklist.close();
+    LittleFS.remove(BLOCKLIST_PATH);                // free the slot before the rename
+    if (!LittleFS.rename("/blocklist.new", BLOCKLIST_PATH)) {
+      Serial.println("[blocklist] rename failed -- keeping previous state");
+      reopenBlocklist();
+      return false;
+    }
+  } else {
+    LittleFS.remove("/blocklist.new");
+  }
   reopenBlocklist();
   return ok;
 }
@@ -393,7 +442,7 @@ static File upFile;
 static void handleUploadDone() {
   if (!upAuthOk) { web.requestAuthentication(); return; }
   web.send(upOk ? 200 : 500, "text/plain",
-           upOk ? "ok" : "rejected: empty or size not a multiple of 5 (not a blocklist.bin?)");
+           upOk ? "ok" : "rejected: not a valid blocklist.bin (too small, wrong size, or not a multiple of 5)");
 }
 static void handleUpload() {
   HTTPUpload& u = web.upload();
@@ -401,7 +450,13 @@ static void handleUpload() {
     case UPLOAD_FILE_START:
       upAuthOk = web.header(CSRF_HEADER) == CSRF_VALUE && web.authenticate(WEB_USER, WEB_PASS);
       if (!upAuthOk) { Serial.println("[ota] blocklist upload: auth/CSRF check failed"); break; }
-      upOk = false; beginBlocklistSwap();
+      upOk = false;
+      // Write to /blocklist.new only; the live list is swapped in at UPLOAD_FILE_END once
+      // validation passes, so an aborted upload leaves the current blocklist serving.
+      LittleFS.remove("/blocklist.new");
+      // totalSize is CONTENT_LENGTH_UNKNOWN/NOT_SET (huge, not 0) when the browser sends no
+      // length; treat anything implausible as "unknown" so a valid upload is never rejected.
+      expectedBlocklistBytes = (u.totalSize > 0 && u.totalSize <= MAX_BLOCKLIST_BYTES) ? u.totalSize : 0;
       upFile = LittleFS.open("/blocklist.new", "w");
       Serial.printf("[ota] receiving %s\n", u.filename.c_str());
       break;
@@ -412,6 +467,7 @@ static void handleUpload() {
       if (!upAuthOk) break;
       if (upFile) upFile.close();
       upOk = commitNewBlocklist();
+      expectedBlocklistBytes = 0;
       Serial.printf("[ota] %s -> %u domains\n", upOk ? "OK" : "REJECTED", numHashes);
       break;
     case UPLOAD_FILE_ABORTED:
@@ -445,18 +501,33 @@ static bool fetchBlocklist(String url) {
   if (!(https ? http.begin(cs, url) : http.begin(cl, url))) { updateStatus = "begin failed"; return false; }
   int code = http.GET();
   if (code != HTTP_CODE_OK) { http.end(); updateStatus = "HTTP " + String(code); Serial.printf("[remote] %s\n", updateStatus.c_str()); return false; }
-  beginBlocklistSwap();
+  int len = http.getSize();                         // -1 when chunked/unknown
+  // Download into /blocklist.new WITHOUT touching the live list. The old code removed
+  // BLOCKLIST_PATH up front, so any failure below (network drop, full FS, short read) left
+  // the device with no blocklist at all until the next successful update.
+  LittleFS.remove("/blocklist.new");                // drop any stale partial from a prior run
   File f = LittleFS.open("/blocklist.new", "w");
-  if (!f) { http.end(); updateStatus = "fs open failed"; reopenBlocklist(); return false; }
+  if (!f) { http.end(); updateStatus = "fs open failed"; return false; }
   WiFiClient* stream = http.getStreamPtr();
-  int len = http.getSize(); uint8_t b[1024]; size_t total = 0; uint32_t idle = millis();
+  uint8_t b[1024]; size_t total = 0; uint32_t idle = millis();
   while (http.connected() && (len < 0 || (int)total < len)) {
     size_t avail = stream->available();
     if (avail) { int n = stream->readBytes(b, avail > sizeof(b) ? sizeof(b) : avail); if (n > 0) { f.write(b, n); total += n; idle = millis(); } }
     else { if (millis() - idle > 15000) break; delay(2); }
   }
   f.close(); http.end();
+  // Reject a short transfer here rather than letting commitNewBlocklist decide: a severed
+  // connection can end at any byte count, and the reader above exits its loop on either
+  // the deadline or the socket closing, so `total < len` means the body is incomplete.
+  if (len > 0 && (int)total != len) {
+    updateStatus = "short read (" + String((unsigned)total) + "/" + String(len) + "B)";
+    discardPendingBlocklist();
+    Serial.printf("[remote] %s\n", updateStatus.c_str());
+    return false;
+  }
+  expectedBlocklistBytes = (len > 0) ? (size_t)len : 0;
   bool ok = commitNewBlocklist();
+  expectedBlocklistBytes = 0;
   updateStatus = ok ? ("ok: " + String(numHashes) + " domains") : ("bad data (" + String(total) + "B)");
   Serial.printf("[remote] %s\n", updateStatus.c_str());
   return ok;
