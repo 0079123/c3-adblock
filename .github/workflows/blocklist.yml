@@ -4,9 +4,9 @@ name: blocklist
 #   https://github.com/0079123/c3-adblock/releases/download/blocklist/blocklist.bin
 # Point a device's "Remote auto-update" at that URL and it stays current on its own.
 #
-# The list merges StevenBlack + Hagezi Light with home-dns-adblock's CN app rules
-# (Douyin/Fanqie/Hongguo/Xiaohongshu/Amap), pulled live from that repo's dist/ so
-# upstream rule updates land here with no edit. See tools/build_blocklist.py.
+# The list merges Hagezi Light + anti-AD with home-dns-adblock's CN app rules
+# (Douyin/Fanqie/Hongguo/Xiaohongshu/Amap), all pulled live so upstream rule
+# updates land here with no edit. See tools/build_blocklist.py.
 on:
   schedule:
     - cron: "17 4 * * 1"   # Mondays 04:17 UTC

@@ -115,7 +115,7 @@ The default build targets **CN networks**, with video/App ads as the primary goa
 | Source | What it adds |
 |---|---|
 | [Hagezi Light](https://github.com/hagezi/dns-blocklists) | Broad ads/trackers/malware; strongest general list, covers Kuaishou/Bilibili/iQiyi/Youku |
-| [anti-AD](https://github.com/privacy-protection-tools/anti-AD) | CN web + App ads (`pos.baidu.com`, `cnzz.com`, `tanx.com`, iQiyi/Youku/MangoTV ad hosts) |
+| [anti-AD](https://github.com/privacy-protection-tools/anti-AD) | CN web + App ads (`pos.baidu.com`, `cnzz.com`, iQiyi/Youku/MangoTV ad hosts) |
 | [home-dns-adblock](https://github.com/abclq/home-dns-adblock) | CN App ads from real device DNS logs (Douyin/Fanqie/Hongguo/Xiaohongshu) |
 
 All three are pulled **live from stable raw URLs** on every build, so upstream rule updates

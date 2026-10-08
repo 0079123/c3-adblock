@@ -132,7 +132,8 @@ def read_source(src: str) -> str:
 #
 # Matching is deliberately strict: the label immediately before the protected parent must
 # END with one of these markers, so 'not-a-reading-ad.qznovelvod.com' does not qualify and
-# a real-video host can never match.
+# a real-video host can never match. The bare 'reading-ad.qznovelvod.com' form (no vNNN
+# prefix) is allowed too: strip the leading '-' and compare as a whole label.
 AD_ENDPOINT_MARKERS = ('-reading-ad',)
 
 def is_protected(domain: str, protect) -> bool:
@@ -143,7 +144,7 @@ def is_ad_endpoint(domain: str, protect) -> bool:
     for parent in protect:
         if domain.endswith('.' + parent):
             label = domain[:-(len(parent) + 1)].rsplit('.', 1)[-1]
-            if any(label.endswith(marker) for marker in AD_ENDPOINT_MARKERS):
+            if any(label.endswith(m) or label == m.lstrip('-') for m in AD_ENDPOINT_MARKERS):
                 return True
     return False
 
@@ -178,8 +179,16 @@ def main():
     if '--no-protect' in flags:
         protect = []
     elif '--protect-file' in flags:
-        protect = [norm(l) for l in read_source(raw[raw.index('--protect-file') + 1]).splitlines()
+        idx = raw.index('--protect-file') + 1
+        if idx >= len(raw):
+            sys.exit('--protect-file needs a path or URL argument')
+        pf = raw[idx]
+        if not os.path.exists(pf) and '://' not in pf:
+            sys.exit(f'--protect-file: no such file: {pf}')
+        protect = [norm(l) for l in read_source(pf).splitlines()
                    if l.strip() and not l.lstrip().startswith('#')]
+        if not protect:
+            sys.exit(f'--protect-file: {pf} listed no domains (refusing to disable protection)')
     else:
         protect = [norm(p) for p in DEFAULT_PROTECT]
 

@@ -135,6 +135,37 @@ class BuildBlocklistTests(unittest.TestCase):
 
             self.assertEqual(hashes_of(output), {fnv(b'qznovelvod.com')})
 
+    def test_protect_file_misuse_fails_cleanly(self):
+        """Misuse must exit with a message, not a traceback -- and an empty protect file
+        must not silently behave like --no-protect."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'domains.txt'
+            source.write_text('ads.example.com\n', encoding='utf-8')
+            out = root / 'blocklist.bin'
+            empty = root / 'empty.txt'
+            empty.write_text('# only a comment\n', encoding='utf-8')
+
+            cases = {
+                'missing value': ('--protect-file',),
+                'nonexistent file': ('--protect-file', str(root / 'nope.txt')),
+                'empty file': ('--protect-file', str(empty)),
+            }
+            for label, flags in cases.items():
+                with self.subTest(label):
+                    proc = subprocess.run([sys.executable, str(SCRIPT), str(out), str(source), *flags],
+                                          capture_output=True, text=True)
+                    self.assertNotEqual(proc.returncode, 0, f'{label} must fail')
+                    self.assertNotIn('Traceback', proc.stderr, f'{label} must not traceback')
+                    self.assertIn('--protect-file', proc.stderr)
+
+    def test_marker_only_subdomain_of_protected_parent(self):
+        """A subdomain whose label IS the marker (no version prefix) is still an ad
+        endpoint; the check must not depend on a vNNN prefix existing."""
+        self.assertTrue(is_ad_endpoint('reading-ad.qznovelvod.com', ['qznovelvod.com']))
+        self.assertTrue(is_ad_endpoint('x-reading-ad.qznovelvod.com', ['qznovelvod.com']))
+        self.assertFalse(is_ad_endpoint('qznovelvod.com', ['qznovelvod.com']))
+
     def test_repeated_source_reports_its_own_size_not_net_new(self):
         """A source listing only domains already seen must NOT look empty: the shrink
         guard counts what a source lists, not what it newly contributes."""
