@@ -34,11 +34,23 @@ markup = html[:html.index('<script>')]
 ids = set(re.findall(r'id=([A-Za-z_][\w-]*)', markup))
 print(f"仪表盘: markup 中 {len(ids)} 个 id")
 
-# 1. implicit-global DOM references must resolve to a real id
+# 1. Implicit-global DOM references must resolve to a real id. Local variables
+#    (declared with var/let/const, or used as function params) are legitimate and must be
+#    excluded, otherwise `var b=document.getElementById(...)` reads as a missing id.
+locals_ = set(re.findall(r"\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)", js))
+locals_ |= set(re.findall(r"function\s*[\w$]*\s*\(([^)]*)\)", js))  # crude: params blob
+locals_ |= set(re.findall(r"\bcatch\s*\(\s*([A-Za-z_$][\w$]*)\s*\)", js))
+params = set()
+for blob in re.findall(r"function\s*[\w$]*\s*\(([^)]*)\)", js):
+    for p_ in blob.split(','):
+        p_ = p_.strip()
+        if p_:
+            params.add(p_)
+locals_ |= params
 refs = set(re.findall(
     r"(?:^|[;\s(])([a-z][A-Za-z0-9_]*)\s*\.\s*"
     r"(?:textContent|innerHTML|style|placeholder|value|dataset)", js))
-missing = sorted(r for r in refs - ids - SKIP)
+missing = sorted(r for r in refs - ids - SKIP - locals_)
 check(not missing, f"脚本引用的 DOM id 都存在 (缺失: {missing or '无'})")
 
 # 2. indexed option access must stay in range

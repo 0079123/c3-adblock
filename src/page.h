@@ -20,6 +20,7 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 </style></head><body>
 <header><h1>🛡️ C3 AdBlock <span id=host></span></h1>
 <button id=langbtn onclick=toggleLang() style="position:absolute;top:14px;right:18px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:5px 10px;cursor:pointer;font-size:13px">English</button></header><div class=wrap>
+<div id=errbar style="display:none;background:#3b1d1d;border:1px solid #f85149;color:#ffb3ae;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px"></div>
 <div id=credwarn style="display:none;background:#3b1d1d;border:1px solid #f85149;color:#ffb3ae;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px">
 ⚠️ <b id=credwarnT></b> <span id=credwarnB></span>
 </div>
@@ -82,6 +83,7 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  forgetConfirm:'确定要清除已保存的 WiFi 并重启进入配网页面吗？',
  updFetching:'拉取中…',updUploading:'上传中',updUpdated:'已更新',updFailed:'上传失败',
  fwFlashing:'刷写中',fwDone:'重启中，约 15 秒后重连',langBtn:'English',
+ needAuth:'需要登录 —— 请刷新页面并输入用户名密码。',actFailed:'操作失败',
  credWarnTitle:'正在使用默认密码。',credWarnBody:'secrets.h 里的 WEB_PASS/OTA_PASS 仍是占位值——任何人都能从公开仓库读到。请设置真实密码并重新烧录。'},
 en:{pause:'Pause',resume:'Resume',pause30:'30s',pause300:'5 min',pause1800:'30 min',pauseInf:'until I re-enable',
  blocking:'Blocking active',paused:'Paused',resumesIn:'Paused — resumes in {n}s',
@@ -107,6 +109,7 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  forgetConfirm:'Forget saved WiFi and reboot into the setup portal?',
  updFetching:'fetching...',updUploading:'uploading',updUpdated:'updated',updFailed:'upload failed',
  fwFlashing:'flashing',fwDone:'rebooting, reconnect in ~15s',langBtn:'中文',
+ needAuth:'Login required -- refresh the page and sign in.',actFailed:'Action failed',
  credWarnTitle:'Default credentials in use.',credWarnBody:'WEB_PASS/OTA_PASS in secrets.h are still the placeholder values — anyone can read them in the public repo. Set real values and reflash.'}};
 var lang='en', blockingNow=true;
 function t(k){return (L[lang]&&L[lang][k])||k}
@@ -138,6 +141,24 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 // though the server can't otherwise tell a forged request from a real one over
 // plain HTTP Basic Auth (browsers auto-replay cached Basic Auth cross-origin).
 const CSRF_HDRS={'X-Requested-With':'c3-adblock'}
+// fetch() does NOT raise the browser's Basic-Auth dialog: a request without cached
+// credentials just resolves with 401. Every action used to ignore that and looked "dead".
+// This wrapper surfaces auth failures explicitly so a rejected click is never silent.
+function api(url,opts){
+  return fetch(url,Object.assign({headers:CSRF_HDRS},opts||{})).then(function(r){
+    if(r.status===401){alert(t('needAuth'));throw new Error('auth');}
+    if(!r.ok){throw new Error('http '+r.status);}
+    return r;
+  }).catch(function(e){
+    if(String(e.message)!=='auth')banner(t('actFailed')+': '+e.message);
+    throw e;
+  });
+}
+function banner(msg){
+  var b=document.getElementById('errbar');
+  b.textContent=msg;b.style.display='block';
+  clearTimeout(banner._t);banner._t=setTimeout(function(){b.style.display='none';},6000);
+}
 function togglePause(){fetch(blockstate.dataset.on=='1'?'/pause?s='+pausedur.value:'/resume',{headers:CSRF_HDRS}).then(load);}
 async function load(){let s=await(await fetch('/stats.json')).json();
 host.textContent='@ '+s.ip;
@@ -161,12 +182,12 @@ var hasUrl=!!(s.upurl&&s.upurl.length);
 upBadge.style.color=hasUrl?(s.upcustom?'#8b949e':'#3fb950'):'#f0883e';
 upBadge.textContent=!hasUrl?t('updOff')
   :(s.upcustom?t('updCustom'):t('updDefault').replace('{h}',s.upiv||24));}
-function addDom(){let d=dom.value.trim();if(d){fetch('/addblock?d='+encodeURIComponent(d),{headers:CSRF_HDRS}).then(()=>{dom.value='';load()})}}
-ct.addEventListener('click',e=>{if(e.target.classList.contains('ban'))fetch('/ban?ip='+e.target.dataset.ip,{headers:CSRF_HDRS}).then(load)});
-cl.addEventListener('click',e=>{if(e.target.classList.contains('rmbtn'))fetch('/unblock?d='+encodeURIComponent(e.target.dataset.d),{headers:CSRF_HDRS}).then(load)});
-function saveUpd(){fetch('/setupdate?u='+encodeURIComponent(uurl.value.trim())+'&h='+(parseInt(uiv.value)||24),{headers:CSRF_HDRS}).then(load)}
-function resetUpd(){if(!confirm(t('btnResetUpd')+'?'))return;fetch('/resetupdate',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>{ustat.textContent=x;load()})}
-function fetchNow(){ustat.textContent=t('updFetching');fetch('/fetchnow',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>{ustat.textContent=x;load()})}
+function addDom(){let d=dom.value.trim();if(d){api('/addblock?d='+encodeURIComponent(d)).then(()=>{dom.value='';load()}).catch(function(){})}}
+ct.addEventListener('click',e=>{if(e.target.classList.contains('ban'))api('/ban?ip='+e.target.dataset.ip).then(load).catch(function(){})});
+cl.addEventListener('click',e=>{if(e.target.classList.contains('rmbtn'))api('/unblock?d='+encodeURIComponent(e.target.dataset.d)).then(load).catch(function(){})});
+function saveUpd(){api('/setupdate?u='+encodeURIComponent(uurl.value.trim())+'&h='+(parseInt(uiv.value)||24)).then(load).catch(function(){})}
+function resetUpd(){if(!confirm(t('btnResetUpd')+'?'))return;api('/resetupdate').then(r=>r.text()).then(x=>{ustat.textContent=x;load()}).catch(function(){})}
+function fetchNow(){ustat.textContent=t('updFetching');api('/fetchnow').then(r=>r.text()).then(x=>{ustat.textContent=x;load()}).catch(function(){})}
 // ---- DNS capture ----
 var capIsOn=false;
 function capRender(j){
@@ -183,15 +204,13 @@ function capRender(j){
 }
 function capLoad(){fetch('/capture.json').then(function(r){return r.json()}).then(capRender).catch(function(){})}
 function capToggle(){
-  fetch('/capture?on='+(capIsOn?'0':'1'),{headers:CSRF_HDRS})
-    .then(function(){capLoad()});
+  api('/capture?on='+(capIsOn?'0':'1')).then(function(){capLoad()}).catch(function(){});
 }
 function capApplyFilter(){
-  fetch('/capture?f='+encodeURIComponent(capFilter.value.trim()),{headers:CSRF_HDRS})
-    .then(function(){capLoad()});
+  api('/capture?f='+encodeURIComponent(capFilter.value.trim())).then(function(){capLoad()}).catch(function(){});
 }
 function capClear(){
-  fetch('/capture?clear=1',{headers:CSRF_HDRS}).then(function(){capFilter.value='';capLoad()});
+  api('/capture?clear=1').then(function(){capFilter.value='';capLoad()}).catch(function(){});
 }
 function forgetWifi(){if(!confirm(t('forgetConfirm')))return;fetch('/forgetwifi',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>alert(x))}
 fwf.onsubmit=async e=>{e.preventDefault();let f=fwb.files[0];if(!f)return;fwmsg.textContent=t('fwFlashing')+' '+(f.size/1048576).toFixed(2)+' MB...';
