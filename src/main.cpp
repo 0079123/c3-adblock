@@ -601,27 +601,58 @@ static bool connectWiFi() {
 }
 
 static void handlePortalRoot() {
+  // Bilingual (中文 / English) setup page. Language is applied client-side so the same
+  // response serves both; the choice is remembered in localStorage. Technical terms
+  // (WiFi, SSID, IP, DNS) stay in English since that is what the OS dialogs show too.
   String html =
     "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>C3 AdBlock setup</title>"
+    "<title>C3 AdBlock 设置 / setup</title>"
     "<body style='font:16px system-ui,sans-serif;max-width:420px;margin:36px auto;padding:0 16px;background:#0d1117;color:#c9d1d9'>"
-    "<h2>&#128737; C3 AdBlock &mdash; WiFi setup</h2>"
-    "<p style='color:#8b949e'>Pick your network and enter its password. The device restarts and joins it.</p>"
+    "<div style='display:flex;justify-content:space-between;align-items:center'>"
+    "<h2 style='margin:0'>&#128737; C3 AdBlock</h2>"
+    "<button id=lang onclick=toggleLang() style='background:#21262d;color:#c9d1d9;border:1px solid #30363d;"
+    "border-radius:5px;padding:5px 10px;cursor:pointer;font-size:13px'>English</button></div>"
+    "<p id=sub style='color:#8b949e'></p>"
     "<form method=POST action=/wifisave>"
-    "<input list=nets name=s placeholder='WiFi name' required style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
+    "<input list=nets name=s id=ssid required style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;"
+    "border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
     "<datalist id=nets>" + portalOpts + "</datalist>"
-    "<input name=p type=password placeholder='Password' style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
-    "<button style='width:100%;padding:12px;margin-top:8px;border-radius:6px;border:0;background:#3fb950;color:#000;font-weight:600;cursor:pointer'>Connect</button>"
-    "</form></body>";
+    "<input name=p id=pw type=password style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;"
+    "border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
+    "<button id=go style='width:100%;padding:12px;margin-top:8px;border-radius:6px;border:0;background:#3fb950;"
+    "color:#000;font-weight:600;cursor:pointer'></button>"
+    "</form>"
+    "<p id=hint style='color:#8b949e;font-size:13px;margin-top:16px'></p>"
+    "<script>"
+    "var T={zh:{sub:'选择你的 WiFi 并输入密码，设备将重启并接入该网络。',"
+    "ssid:'WiFi 名称 (SSID)',pw:'WiFi 密码',go:'连接',"
+    "hint:'连上后，在浏览器打开 http://c3adblock.local 进入管理面板 (Dashboard)。',btn:'English'},"
+    "en:{sub:'Pick your network and enter its password. The device restarts and joins it.',"
+    "ssid:'WiFi name (SSID)',pw:'WiFi password',go:'Connect',"
+    "hint:'Once connected, open http://c3adblock.local in a browser for the dashboard.',btn:'中文'}};"
+    "function apply(l){var t=T[l];sub.textContent=t.sub;ssid.placeholder=t.ssid;pw.placeholder=t.pw;"
+    "go.textContent=t.go;hint.textContent=t.hint;document.getElementById('lang').textContent=t.btn;"
+    "document.documentElement.lang=(l==='zh'?'zh-CN':'en');try{localStorage.setItem('c3lang',l)}catch(e){}}"
+    "function cur(){try{return localStorage.getItem('c3lang')}catch(e){return null}}"
+    "function toggleLang(){apply(cur()==='zh'?'en':'zh')}"
+    "apply(cur()||((navigator.language||'en').toLowerCase().indexOf('zh')===0?'zh':'en'));"
+    "</script></body>";
   web.send(200, "text/html", html);
 }
 static void handleWifiSave() {
   String ss = web.arg("s"), pw = web.arg("p");
-  if (!ss.length()) { web.send(400, "text/plain", "missing WiFi name"); return; }
+  if (!ss.length()) { web.send(400, "text/plain", "missing WiFi name / 缺少 WiFi 名称"); return; }
   prefs.begin("wifi", false); prefs.putString("ssid", ss); prefs.putString("pass", pw); prefs.end();
-  web.send(200, "text/html", "<!doctype html><meta charset=utf-8><body style='font:16px system-ui;text-align:center;margin-top:60px'>"
-                             "&#9989; Saved. Restarting and joining <b>" + htmlEscape(ss) + "</b>&hellip;<br><br>"
-                             "Reconnect your phone to your normal WiFi, then find the box at <b>c3adblock.local</b>.</body>");
+  // Bilingual confirmation. The language choice isn't cached anywhere server-side, so show
+  // both rather than guessing; the saved SSID is HTML-escaped (attacker-controllable input).
+  const String esc = htmlEscape(ss);
+  web.send(200, "text/html", "<!doctype html><meta charset=utf-8>"
+    "<body style='font:16px system-ui;text-align:center;margin-top:60px;padding:0 16px'>"
+    "<p style='font-size:20px'>&#9989; 已保存，正在重启并连接 <b>" + esc + "</b>&hellip;</p>"
+    "<p style='color:#57606a'>Saved. Restarting and joining <b>" + esc + "</b>&hellip;</p>"
+    "<p>请把手机/电脑重新连回你原来的 WiFi，然后访问 <b>c3adblock.local</b></p>"
+    "<p style='color:#57606a'>Reconnect to your normal WiFi, then open <b>c3adblock.local</b>.</p>"
+    "</body>");
   delay(900); ESP.restart();
 }
 // Never returns — blocks in the portal loop until creds are saved (then reboots).
