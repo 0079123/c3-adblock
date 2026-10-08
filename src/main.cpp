@@ -421,11 +421,17 @@ static bool commitNewBlocklist() {                  // /blocklist.new -> live (v
     ok = false;
   }
   if (ok) {
+    // Rename straight over the live file -- do NOT delete it first. littlefs's lfs_rename
+    // accepts an existing target and replaces it in ONE atomic dir commit (it emits
+    // LFS_TYPE_DELETE(newid) + LFS_TYPE_CREATE(newid) together), so the old list keeps
+    // serving right up to the swap and survives if the rename fails. Deleting first (the
+    // previous behaviour) left a window with NO list at all and turned any rename failure
+    // into a permanently empty blocklist. It also avoids needing a second full copy: the
+    // partition is 0x150000 and holding old+new simultaneously would need ~98% of it.
     if (blocklist) blocklist.close();
-    LittleFS.remove(BLOCKLIST_PATH);                // free the slot before the rename
     if (!LittleFS.rename("/blocklist.new", BLOCKLIST_PATH)) {
-      Serial.println("[blocklist] rename failed -- keeping previous state");
-      reopenBlocklist();
+      Serial.println("[blocklist] rename failed -- keeping existing list");
+      reopenBlocklist();                            // live file untouched -> still serving
       return false;
     }
   } else {
@@ -502,6 +508,15 @@ static bool fetchBlocklist(String url) {
   int code = http.GET();
   if (code != HTTP_CODE_OK) { http.end(); updateStatus = "HTTP " + String(code); Serial.printf("[remote] %s\n", updateStatus.c_str()); return false; }
   int len = http.getSize();                         // -1 when chunked/unknown
+  // Reject an absurd Content-Length before downloading a single byte. Without this a server
+  // advertising e.g. 100 MB would keep us reading until the 15 s idle deadline and only then
+  // fail; the largest list that can possibly fit is the partition itself.
+  if (len > (int)MAX_BLOCKLIST_BYTES) {
+    http.end();
+    updateStatus = "implausible size (" + String(len) + "B)";
+    Serial.printf("[remote] %s\n", updateStatus.c_str());
+    return false;
+  }
   // Download into /blocklist.new WITHOUT touching the live list. The old code removed
   // BLOCKLIST_PATH up front, so any failure below (network drop, full FS, short read) left
   // the device with no blocklist at all until the next successful update.
