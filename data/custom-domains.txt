@@ -32,6 +32,20 @@ tdm.td.qq.com
 # 广告联盟接口
 afp.qiyi.com
 
+# ---- 独立广告平台 / 聚合SDK（真机抓包发现，上游规则集未覆盖）----
+# AdGain「云算」广告变现 SDK（官网 datads.cn 自述：连接100+直投预算、200+APP 的广告聚合）
+datads.cn
+# In-App 聚合广告平台（官网 innoads.cn 自述：聚合多家广告SDK，支持开屏/插屏/激励/Banner/信息流）
+innoads.cn
+# ADX 广告交易竞价日志
+adxlog.9zas5.com
+# 广告推客（移动广告投放/推广平台）
+guangtuikeji.com
+# 腾讯广点通广告素材 CDN（pgdt = 图片广点通；注意 gtimg.cn 本身是腾讯图片域，只加这个子域）
+pgdt.gtimg.cn
+# 芒果TV 广告标识 CAID（China Advertising ID）上报
+caid.data.mgtv.com
+
 # ---- 芒果TV / Mango TV ----
 # 说明：芒果的广告域 da.hunantv.com、mobaliyun.res.mgtv.com 已由上游规则集覆盖。
 # 以下三个语义不确定（可能是广告，也可能是运营/设备标识），默认注释，
@@ -39,3 +53,25 @@ afp.qiyi.com
 # as.mgtv.com
 # guid.mgtv.com
 # act.api.mgtv.com
+
+# ---- 以下语义不确定，抓包确认后再启用 ----
+# cyapi.cn / ndcpp.com：广告联盟常见命名风格但未能查证归属
+# wrapper.cyapi.cn
+# vc-brain.ndcpp.com
+# gravity-engine.com：个推系推送，拦了可能影响 App 消息推送
+# backend.gravity-engine.com
+# qrstuvwxyzab.com / yingt.asia：备案查询中与垃圾站同列、主机名含IP段，疑似广告跳转节点
+# 3663561479.qrstuvwxyzab.com
+# 220-249-188-216-yf38cae3.yingt.asia
+# 推送类：拦了可能影响消息/通知功能
+# push.m.youku.com
+# msg.qy.net
+
+# ---- 明确【不能加】的 CDN/DNS 调度基础设施（真机抓包中大量出现）----
+# 这些是内容分发调度域名，拦了会导致图片/视频/APP 加载失败：
+#   cdngslb.com tdnsv6.com tdnsvod1.cn tdnsstic1.cn tdnsdl1.cn kunlunar.com kunlunhuf.com
+#   kunlunle.com cdnhwcibv122.com cdnhwchcg02.com edgekey.net akadns.net apple-dns.cn
+#   cdn-apple.com aaplimg.com qtlcdn.com jomodns.com bcebos.com myqcloud.com tbcache.com
+#   alibabadns.com aliyuncsslb.com bytedns3.com ksyuncdn.com shifen.com 71edge.com
+#   queniusz.com queniuak.com queniuuf.com queniubl.com ydycdn.com dnse2.com dnsv1.com
+#   123clouddrive.net 1rtb.net(部分) hitv.com(IPTV业务) gitv.tv(业务) soku.com(优酷搜索)

@@ -234,12 +234,12 @@ static int capRootOffset(const char* d) {
 
 struct CapEntry {
   char     root[CAPTURE_ROOT_MAX];      // grouping key (or full name while filtering)
-  char     example[CAPTURE_DOMAIN_MAX]; // one full hostname seen under this root
+  char     example[CAPTURE_DOMAIN_MAX]; // an ALLOWED full hostname under this root, if any
   uint32_t ip;
   uint32_t firstMs, lastMs;
-  uint16_t hits;                        // queries collapsed into this row
+  uint16_t hits, blockedHits;           // total, and how many of those were blocked
   uint8_t  qtype;
-  bool     used, blocked;
+  bool     used;
 };
 static CapEntry capBuf[CAPTURE_SIZE];
 static uint32_t capQueries = 0;            // total queries recorded since the last clear
@@ -258,9 +258,13 @@ static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool block
     CapEntry& e = capBuf[i];
     if (e.used && strcmp(e.root, key) == 0) {
       if (e.hits < 0xFFFF) e.hits++;
-      e.ip = ip; e.qtype = qtype; e.blocked = blocked; e.lastMs = millis();
-      if (strcmp(e.example, domain) != 0 && e.hits <= 2)   // keep a representative name
-        strncpy(e.example, domain, CAPTURE_DOMAIN_MAX - 1);
+      if (blocked && e.blockedHits < 0xFFFF) e.blockedHits++;
+      e.ip = ip; e.qtype = qtype; e.lastMs = millis();
+      // Keep an *allowed* hostname as the example: that is the actionable one when hunting
+      // for leaks. Recording any name made the CSV claim e.g. stun.hitv.com was allowed
+      // while the group's blocked flag actually came from a different subdomain.
+      if (!blocked) strncpy(e.example, domain, CAPTURE_DOMAIN_MAX - 1);
+      e.example[CAPTURE_DOMAIN_MAX - 1] = 0;
       return;
     }
   }
@@ -270,8 +274,8 @@ static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool block
     e.used = true;
     strncpy(e.root, key, CAPTURE_ROOT_MAX - 1);      e.root[CAPTURE_ROOT_MAX - 1] = 0;
     strncpy(e.example, domain, CAPTURE_DOMAIN_MAX - 1); e.example[CAPTURE_DOMAIN_MAX - 1] = 0;
-    e.ip = ip; e.qtype = qtype; e.blocked = blocked;
-    e.hits = 1; e.firstMs = e.lastMs = millis();
+    e.ip = ip; e.qtype = qtype;
+    e.hits = 1; e.blockedHits = blocked ? 1 : 0; e.firstMs = e.lastMs = millis();
     return;
   }
   capOverflow = true;   // table full: further distinct domains are dropped; shown in the UI
@@ -1213,9 +1217,10 @@ void setup() {
       if (k) j += ",";
       IPAddress ip(e.ip);
       j += "{\"d\":\"" + jesc(String(e.root)) + "\",\"ex\":\"" + jesc(String(e.example)) +
-           "\",\"hits\":" + String(e.hits) +
+           "\",\"hits\":" + String(e.hits) + ",\"bh\":" + String(e.blockedHits) +
+           ",\"ah\":" + String(e.hits - e.blockedHits) +
            ",\"ip\":\"" + ip.toString() + "\",\"q\":" + String(e.qtype) +
-           ",\"b\":" + String(e.blocked ? "true" : "false") +
+           ",\"b\":" + String(e.blockedHits == e.hits ? "true" : "false") +
            ",\"first\":" + String(e.firstMs) + ",\"last\":" + String(e.lastMs) + "}";
     }
     j += "]}";
@@ -1224,13 +1229,13 @@ void setup() {
   web.on("/capture.csv", [&capSorted, &capOrder]() {
     // One row per group (root domain, or full hostname while filtering), most-queried first.
     int n = capSorted(&capOrder);
-    String csv = "rank,domain,example,hits,blocked,client,qtype,first_ms,last_ms\r\n";
+    String csv = "rank,domain,example_allowed,hits,blocked,allowed,client,qtype,first_ms,last_ms\r\n";
     for (int k = 0; k < n; k++) {
       const CapEntry& e = capBuf[capOrder[k]];
       IPAddress ip(e.ip);
       csv += String(k + 1) + ",\"" + String(e.root) + "\",\"" + String(e.example) +
              "\"," + String(e.hits) + "," +
-             String(e.blocked ? 1 : 0) + "," + ip.toString() + "," + String(e.qtype) +
+             String(e.blockedHits) + "," + String(e.hits - e.blockedHits) + "," + ip.toString() + "," + String(e.qtype) +
              "," + String(e.firstMs) + "," + String(e.lastMs) + "\r\n";
     }
     web.sendHeader("Content-Disposition", "attachment; filename=c3-dns-capture.csv");

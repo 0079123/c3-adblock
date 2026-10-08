@@ -78,10 +78,11 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  hCap:'抓包 — DNS 查询记录 (CAPTURE)',
  btnCapStart:'开始抓包',btnCapStop:'停止抓包',btnCapApply:'应用过滤',btnCapClear:'清空',btnCapCsv:'下载 CSV',
  thCapDomain:'域名',thCapHits:'次数',thCapResult:'结果',thCapClient:'客户端',
- capQueries:'次查询',capDistinct:'个域名',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录',
+ capQueries:'次查询',capDistinct:'个域名',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录'
+
  capOn:'● 抓包中',capOff:'○ 未抓包',capEmpty:'暂无记录 —— 点「开始抓包」，然后在 App 里复现广告',
  capHint:'点「开始抓包」后复现漏网的广告（开始时会【自动清空过滤】，确保抓到全部请求，之后再按需过滤）；下方列表和 CSV 会显示设备收到的全部查询，以及每一条是否被拦截。过滤框可只记录含指定关键词的域名（如 iqiyi）。',
- capBlocked:'已拦截',capAllowed:'放行',
+ 
  forgetConfirm:'确定要清除已保存的 WiFi 并重启进入配网页面吗？',
  updFetching:'拉取中…',updUploading:'上传中',updUpdated:'已更新',updFailed:'上传失败',
  fwFlashing:'刷写中',fwDone:'重启中，约 15 秒后重连',langBtn:'English',
@@ -106,9 +107,10 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  btnCapStart:'Start capture',btnCapStop:'Stop capture',btnCapApply:'Apply filter',btnCapClear:'Clear',btnCapCsv:'Download CSV',
  thCapDomain:'Domain',thCapHits:'Hits',thCapResult:'Result',thCapClient:'Client',
  capQueries:'queries',capDistinct:'domains',capFiltering:'filtering: ',capOverflow:'domain table full; new domains dropped',
+ 
  capOn:'● capturing',capOff:'○ idle',capEmpty:'no entries yet -- press Start capture, then reproduce the ad in the app',
  capHint:'Press Start capture, then reproduce the ad (this CLEARS the filter so everything is captured);  The list and CSV show every query the device received and whether each was blocked. The filter box records only domains containing a keyword (e.g. iqiyi).',
- capBlocked:'BLOCKED',capAllowed:'allowed',
+ 
  forgetConfirm:'Forget saved WiFi and reboot into the setup portal?',
  updFetching:'fetching...',updUploading:'uploading',updUpdated:'updated',updFailed:'upload failed',
  fwFlashing:'flashing',fwDone:'rebooting, reconnect in ~15s',langBtn:'中文',
@@ -255,8 +257,8 @@ function capRender(j){
   capTbl.style.display=es.length?'':'none';
   capTbl.tBodies[0].innerHTML = es.length? es.map(function(e){
     return '<tr><td>'+esc(e.d)+'<div style="color:#8b949e;font-size:11px">'+esc(e.ex||'')+'</div></td><td style="color:#8b949e">'+fmt(e.hits||1)+'</td>'+
-      '<td style="color:'+(e.b?'#f85149':'#3fb950')+'">'+
-      (e.b?t('capBlocked'):t('capAllowed'))+'</td><td style="color:#8b949e">'+esc(e.ip)+'</td></tr>';
+      '<td style="color:'+(e.bh?'#f85149':'#3fb950')+'">'+
+      (e.bh?('拦'+fmt(e.bh)+(e.ah?' / 放'+fmt(e.ah):'')):('放'+fmt(e.ah||e.hits)))+'</td><td style="color:#8b949e">'+esc(e.ip)+'</td></tr>';
   }).join('') : ('<tr><td colspan=4 style=color:#8b949e>'+t('capEmpty')+'</td></tr>');
 }
 function capLoad(){fetch('/capture.json').then(function(r){return r.json()}).then(capRender).catch(function(){})}
