@@ -43,6 +43,16 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 <h2 id=hFw></h2>
 <form id=fwf style=margin-bottom:6px><input type=file id=fwb accept=.bin><button id=btnFw></button> <span id=fwmsg style=color:#8b949e></span></form>
 <div id=fwHint style="color:#8b949e;font-size:12px;margin-bottom:18px"></div>
+<h2 id=hCap></h2>
+<div style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+<button id=btnCapToggle onclick=capToggle()></button>
+<input id=capFilter placeholder="iqiyi" size=12 style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px">
+<button id=btnCapApply onclick=capApplyFilter()></button>
+<button id=btnCapClear onclick=capClear()></button>
+<a id=capCsv href="/capture.csv" download><button id=btnCapCsv type=button></button></a>
+<span id=capState style="font-size:12px;color:#8b949e"></span></div>
+<div id=capHint style="color:#8b949e;font-size:12px;margin-bottom:8px"></div>
+<table id=capTbl style="display:none"><thead><tr><th id=thCapDomain></th><th id=thCapResult></th><th id=thCapClient></th></tr></thead><tbody></tbody></table>
 <h2 id=hWifi></h2>
 <div style=margin-bottom:18px><button id=btnForget onclick="forgetWifi()"></button></div>
 </div><script>
@@ -63,6 +73,12 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  hFw:'固件 — OTA 升级 (FIRMWARE)',btnFw:'刷入固件',
  fwHint:'上传 .pio/build/c3/firmware.bin — 设备会校验后重启进入新固件',
  hWifi:'WiFi 设置',btnForget:'忘记 WiFi 并重启到配网页面',
+ hCap:'抓包 — DNS 查询记录 (CAPTURE)',
+ btnCapStart:'开始抓包',btnCapStop:'停止抓包',btnCapApply:'应用过滤',btnCapClear:'清空',btnCapCsv:'下载 CSV',
+ thCapDomain:'域名',thCapResult:'结果',thCapClient:'客户端',
+ capOn:'● 抓包中',capOff:'○ 未抓包',capEmpty:'暂无记录 —— 点「开始抓包」，然后在 App 里复现广告',
+ capHint:'点「开始抓包」后在爱奇艺/腾讯视频里复现漏网的广告；下方列表和 CSV 会显示设备收到的全部查询，以及每一条是否被拦截。过滤框可只记录含指定关键词的域名（如 iqiyi）。',
+ capBlocked:'已拦截',capAllowed:'放行',
  forgetConfirm:'确定要清除已保存的 WiFi 并重启进入配网页面吗？',
  updFetching:'拉取中…',updUploading:'上传中',updUpdated:'已更新',updFailed:'上传失败',
  fwFlashing:'刷写中',fwDone:'重启中，约 15 秒后重连',langBtn:'English',
@@ -82,6 +98,12 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  hFw:'FIRMWARE — OTA UPDATE',btnFw:'Flash firmware',
  fwHint:'upload .pio/build/c3/firmware.bin — device verifies it and reboots into it',
  hWifi:'WIFI',btnForget:'Forget WiFi and reboot into the setup portal',
+ hCap:'CAPTURE -- DNS query log',
+ btnCapStart:'Start capture',btnCapStop:'Stop capture',btnCapApply:'Apply filter',btnCapClear:'Clear',btnCapCsv:'Download CSV',
+ thCapDomain:'Domain',thCapResult:'Result',thCapClient:'Client',
+ capOn:'● capturing',capOff:'○ idle',capEmpty:'no entries yet -- press Start capture, then reproduce the ad in the app',
+ capHint:'Press Start capture, then reproduce the missing ad in iQiyi/Tencent Video. The list and CSV show every query the device received and whether each was blocked. The filter box records only domains containing a keyword (e.g. iqiyi).',
+ capBlocked:'BLOCKED',capAllowed:'allowed',
  forgetConfirm:'Forget saved WiFi and reboot into the setup portal?',
  updFetching:'fetching...',updUploading:'uploading',updUpdated:'updated',updFailed:'upload failed',
  fwFlashing:'flashing',fwDone:'rebooting, reconnect in ~15s',langBtn:'中文',
@@ -103,6 +125,9 @@ function applyLang(l){lang=l;try{localStorage.setItem('c3lang',l)}catch(e){}
  remoteHint.textContent=t('remoteHint');lblLast.textContent=t('lblLast');
  hFw.textContent=t('hFw');btnFw.textContent=t('btnFw');fwHint.textContent=t('fwHint');
  hWifi.textContent=t('hWifi');btnForget.textContent=t('btnForget');
+ hCap.textContent=t('hCap');btnCapApply.textContent=t('btnCapApply');btnCapClear.textContent=t('btnCapClear');
+ btnCapCsv.textContent=t('btnCapCsv');capHint.textContent=t('capHint');
+ thCapDomain.textContent=t('thCapDomain');thCapResult.textContent=t('thCapResult');thCapClient.textContent=t('thCapClient');
  credwarnT.textContent=t('credWarnTitle');credwarnB.textContent=t('credWarnBody');
  load();}
 function toggleLang(){applyLang(lang==='zh'?'en':'zh')}
@@ -142,6 +167,32 @@ cl.addEventListener('click',e=>{if(e.target.classList.contains('rmbtn'))fetch('/
 function saveUpd(){fetch('/setupdate?u='+encodeURIComponent(uurl.value.trim())+'&h='+(parseInt(uiv.value)||24),{headers:CSRF_HDRS}).then(load)}
 function resetUpd(){if(!confirm(t('btnResetUpd')+'?'))return;fetch('/resetupdate',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>{ustat.textContent=x;load()})}
 function fetchNow(){ustat.textContent=t('updFetching');fetch('/fetchnow',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>{ustat.textContent=x;load()})}
+// ---- DNS capture ----
+var capIsOn=false;
+function capRender(j){
+  capIsOn=j.on;
+  capState.textContent=(j.on?t('capOn'):t('capOff'))+'  '+(j.total||0)+' 条';
+  btnCapToggle.textContent=j.on?t('btnCapStop'):t('btnCapStart');
+  btnCapToggle.style.background=j.on?'#8b2c2c':'#21262d';
+  var es=j.entries||[];
+  capTbl.style.display=es.length?'':'none';
+  capTbl.tBodies[0].innerHTML = es.length? es.map(function(e){
+    return '<tr><td>'+esc(e.d)+'</td><td style="color:'+(e.b?'#f85149':'#3fb950')+'">'+
+      (e.b?t('capBlocked'):t('capAllowed'))+'</td><td style="color:#8b949e">'+esc(e.ip)+'</td></tr>';
+  }).join('') : ('<tr><td colspan=3 style=color:#8b949e>'+t('capEmpty')+'</td></tr>');
+}
+function capLoad(){fetch('/capture.json').then(function(r){return r.json()}).then(capRender).catch(function(){})}
+function capToggle(){
+  fetch('/capture?on='+(capIsOn?'0':'1'),{headers:CSRF_HDRS})
+    .then(function(){capLoad()});
+}
+function capApplyFilter(){
+  fetch('/capture?f='+encodeURIComponent(capFilter.value.trim()),{headers:CSRF_HDRS})
+    .then(function(){capLoad()});
+}
+function capClear(){
+  fetch('/capture?clear=1',{headers:CSRF_HDRS}).then(function(){capFilter.value='';capLoad()});
+}
 function forgetWifi(){if(!confirm(t('forgetConfirm')))return;fetch('/forgetwifi',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>alert(x))}
 fwf.onsubmit=async e=>{e.preventDefault();let f=fwb.files[0];if(!f)return;fwmsg.textContent=t('fwFlashing')+' '+(f.size/1048576).toFixed(2)+' MB...';
 let fd=new FormData();fd.append('f',f);
@@ -154,5 +205,7 @@ try{let r=await fetch('/upload',{method:'POST',headers:CSRF_HDRS,body:fd});upmsg
 catch(_){upmsg.textContent='✗ '+t('updFailed');}
 blf.value='';setTimeout(load,600);};
 applyLang(cur()||((navigator.language||'en').toLowerCase().indexOf('zh')===0?'zh':'en'));
+capLoad();
 setInterval(load,3000);
+setInterval(function(){if(capIsOn)capLoad()},3000);
 </script></body></html>)HTML";

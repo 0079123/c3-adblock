@@ -74,7 +74,11 @@ uint8_t buf[1536];   // fits any non-fragmented UDP reply (EDNS answers can exce
 // 12-byte header is stored: the transaction id must be per-request, so it is patched back
 // in when answering. TTL comes from the upstream record, capped so a long TTL cannot pin a
 // stale address, with a floor so a 0-TTL answer is not effectively uncached.
-static const int DNS_CACHE_SIZE = 64;              // power of 2
+// Sized to fit the classic ESP32 too: 64 entries x ~650 B overflowed its DRAM by 13.8 KB
+// (`dram0_0_seg`), which only surfaced because CI compiles both boards. 24 entries still
+// covers the hot set for ordinary browsing (a page load touches a handful of hosts, and
+// repeats are what the cache is for) while costing ~15 KB instead of ~41 KB.
+static const int DNS_CACHE_SIZE = 32;              // power of 2
 static const uint32_t DNS_TTL_MIN_MS = 5UL * 1000;
 static const uint32_t DNS_TTL_MAX_MS = 10UL * 60 * 1000;
 struct DnsCacheEntry {
@@ -83,7 +87,7 @@ struct DnsCacheEntry {
   uint16_t bodyLen;                                // bytes of the cached response body
   uint8_t  key[128 + 4];                           // question section (<=128 B name + qtype/qclass)
   uint8_t  keyLen;
-  uint8_t  body[512];                              // response without its 12-byte header
+  uint8_t  body[320];                              // response minus its 12-byte header
 };
 static DnsCacheEntry dnsCache[DNS_CACHE_SIZE];
 static uint32_t dnsCacheHits = 0, dnsCacheMiss = 0;   // surfaced in /stats.json
@@ -164,6 +168,39 @@ String customDom[MAX_CUSTOM]; uint64_t customHash[MAX_CUSTOM]; int numCustom = 0
 
 static const int MAX_BAN = 32;
 uint32_t bannedIP[MAX_BAN]; int numBanned = 0;
+
+// ---------- DNS query capture ----------
+// Records every query the device sees, so "this ad still gets through" can be turned into
+// concrete hostnames instead of guesswork: start capture, reproduce the ad in the app,
+// then read the list to see exactly what was asked for and whether it was blocked.
+//
+// RAM-backed on purpose. Writing each query to LittleFS would wear the flash and block the
+// DNS loop; this ring keeps the newest N entries and never touches disk.
+// 96 x (128-byte domain + 9 bytes) ~= 13 KB, comfortably inside the ~120 KB free heap.
+static const int CAPTURE_SIZE = 96;
+static const int CAPTURE_DOMAIN_MAX = 96;
+struct CapEntry {
+  char     domain[CAPTURE_DOMAIN_MAX];
+  uint32_t ip;            // client that asked
+  uint32_t ms;            // millis() when recorded; 0 means the slot is still empty
+  uint8_t  qtype;
+  bool     blocked;
+};
+static CapEntry capBuf[CAPTURE_SIZE];
+static uint32_t capTotal = 0;          // entries recorded since the last clear
+static bool     capOn = false;
+static String   capFilter;             // substring filter; empty records everything
+
+static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool blocked) {
+  if (!capOn) return;
+  if (capFilter.length() && String(domain).indexOf(capFilter) < 0) return;
+  CapEntry& e = capBuf[capTotal % CAPTURE_SIZE];
+  strncpy(e.domain, domain, CAPTURE_DOMAIN_MAX - 1);
+  e.domain[CAPTURE_DOMAIN_MAX - 1] = 0;
+  e.ip = ip; e.qtype = qtype; e.blocked = blocked;
+  e.ms = millis(); if (!e.ms) e.ms = 1;   // 0 marks an empty slot, so never store 0
+  capTotal++;
+}
 
 // remote blocklist auto-update
 //
@@ -463,6 +500,8 @@ static bool handleDns() {
     Dev* c = getClient((uint32_t)cip);
     bool ban = c && c->banned;
     bool blocked = ban || (blockingOn && dl && numHashes && isBlocked(domain));
+    // Record before acting, so the capture shows what arrived and how it was classified.
+    if (dl) capRecord(domain, (uint32_t)cip, (uint8_t)qtype, blocked);
     int rlen;
     if (blocked) { rlen = buildBlocked(qend, qtype); totalBlocked++; if (c) c->blocked++; }
     else {
@@ -1016,6 +1055,55 @@ void setup() {
     LittleFS.remove("/update.cfg");                 // fall back to the compiled-in defaults
     lastCheckMs = millis() - (BOOT_FETCH_DELAY_MS ? BOOT_FETCH_DELAY_MS : 0);  // fetch soon
     web.send(200, "text/plain", updateUrl.length() ? updateUrl : "(no default compiled in)");
+  });
+
+  // ---------- DNS capture ----------
+  // /capture?on=1|0[&f=substr][&clear=1] controls it; /capture.json and /capture.csv read
+  // it. Reads are unauthenticated like /stats.json (they are only as sensitive as the
+  // client list already exposed there), but starting/clearing requires auth.
+  web.on("/capture", []() {
+    if (!requireAuth()) return;
+    if (web.hasArg("clear")) { capTotal = 0; capOn = false; memset(capBuf, 0, sizeof(capBuf)); }
+    if (web.hasArg("f")) capFilter = web.arg("f");
+    if (web.hasArg("on")) capOn = web.arg("on") != "0";
+    web.send(200, "application/json", String("{\"on\":") + (capOn ? "true" : "false") +
+              ",\"filter\":\"" + jesc(capFilter) + "\"}");
+  });
+  web.on("/capture.json", []() {
+    // Newest first, skipping slots that were never written.
+    String j = "{\"on\":" + String(capOn ? "true" : "false") +
+               ",\"total\":" + String(capTotal) +
+               ",\"filter\":\"" + jesc(capFilter) + "\",\"entries\":[";
+    bool first = true;
+    uint32_t n = (capTotal < CAPTURE_SIZE) ? capTotal : CAPTURE_SIZE;
+    for (uint32_t k = n; k > 0; k--) {
+      uint32_t idx = (capTotal - k) % CAPTURE_SIZE;
+      const CapEntry& e = capBuf[idx];
+      if (!e.ms) continue;
+      if (!first) j += ",";
+      first = false;
+      IPAddress ip(e.ip);
+      j += "{\"t\":" + String(e.ms) + ",\"d\":\"" + jesc(String(e.domain)) +
+           "\",\"ip\":\"" + ip.toString() + "\",\"q\":" + String(e.qtype) +
+           ",\"b\":" + String(e.blocked ? "true" : "false") + "}";
+    }
+    j += "]}";
+    web.send(200, "application/json", j);
+  });
+  web.on("/capture.csv", []() {
+    // Plain text table for copy/paste into a spreadsheet or a bug report.
+    String csv = "seq,ms,domain,client,qtype,blocked\r\n";
+    uint32_t n = (capTotal < CAPTURE_SIZE) ? capTotal : CAPTURE_SIZE;
+    for (uint32_t k = n; k > 0; k--) {
+      uint32_t idx = (capTotal - k) % CAPTURE_SIZE;
+      const CapEntry& e = capBuf[idx];
+      if (!e.ms) continue;
+      IPAddress ip(e.ip);
+      csv += String(capTotal - k + 1) + "," + String(e.ms) + ",\"" + String(e.domain) +
+             "\"," + ip.toString() + "," + String(e.qtype) + "," + String(e.blocked ? 1 : 0) + "\r\n";
+    }
+    web.sendHeader("Content-Disposition", "attachment; filename=c3-dns-capture.csv");
+    web.send(200, "text/csv", csv);
   });
   web.begin();
   ArduinoOTA.setHostname("c3adblock");   // pio run -t upload --upload-port c3adblock.local
