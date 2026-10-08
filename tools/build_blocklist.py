@@ -251,6 +251,12 @@ def main():
         found = set()      # every domain this source LISTED, not just the new ones:
                            # a source that repeats another's entries must not look empty
         for line in data.splitlines():
+            # Cosmetic / scriptlet rules must be rejected BEFORE the '#' comment strip
+            # below, which would otherwise trim 'bilibili.com##.ad' down to a valid-looking
+            # 'bilibili.com' -- turning a CSS selector rule into a block rule for the whole
+            # site. A line carrying a cosmetic marker is never a plain-domain entry.
+            if any(marker in line for marker in ('##', '#@#', '#?#', '#%#', '$#')):
+                skipped += 1; continue
             line = line.split('#', 1)[0].strip() if not line.lstrip().startswith(('||', '@@')) else line.strip()
             if not line or line[0] in '!/[':
                 continue
@@ -266,7 +272,7 @@ def main():
                     found.add(norm(m.group(2)))
                 continue
             if line.startswith(('||', '@@', '|')) or any(c in line for c in '^$*'):
-                skipped += 1; continue    # other adblock syntax (regex, wildcards, cosmetic) -> skip
+                skipped += 1; continue    # other adblock syntax (regex, wildcards) -> skip
             parts = line.split()
             if parts[0] in ('0.0.0.0','127.0.0.1','::1','::'):
                 entries = parts[1:]

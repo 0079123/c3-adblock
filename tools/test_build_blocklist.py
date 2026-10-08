@@ -184,6 +184,30 @@ class BuildBlocklistTests(unittest.TestCase):
             self.assertEqual(hashes_of(output),
                              {fnv(b'one.example.com'), fnv(b'two.example.com')})
 
+    def test_cosmetic_rules_are_not_ingested_as_domains(self):
+        """A CSS/cosmetic rule must never become a domain. 'bilibili.com##.ad' would
+        otherwise be trimmed at the '#' into a valid-looking 'bilibili.com' and block the
+        whole site; 'a.com,b.com##x' would be stored as one bogus comma-joined entry."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'mixed.txt'
+            source.write_text(
+                '163.com,bilibili.com##a[href*=".admaster."]\n'
+                'bilibili.com##.ad\n'
+                'example.com#@#.ads\n'
+                'example.com#?#div:has(.ad)\n'
+                '||ads.example.com^\n'
+                'plain.example.com\n', encoding='utf-8')
+            output = root / 'blocklist.bin'
+
+            build(output, source)
+
+            got = hashes_of(output)
+            self.assertEqual(got, {fnv(b'ads.example.com'), fnv(b'plain.example.com')})
+            for leaked in (b'bilibili.com', b'163.com', b'example.com',
+                           b'163.com,bilibili.com'):
+                self.assertNotIn(fnv(leaked), got, f'cosmetic rule leaked: {leaked!r}')
+
     def test_blob_is_sorted_deduped_five_byte_entries(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
