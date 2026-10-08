@@ -1,10 +1,34 @@
+"""Unit tests for build_blocklist.py.
+
+These run in CI on every push, so they must stay hermetic: every source here is a
+local temp file. Nothing in this module may touch the network.
+"""
 import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from build_blocklist import HASH_BYTES, fnv
+from build_blocklist import (HASH_BYTES, HDA_DOMAINS, HDA_MIN_DOMAINS, check_required_source,
+                             fnv, is_ad_endpoint, is_protected, strip_protected)
+
+SCRIPT = pathlib.Path(__file__).with_name('build_blocklist.py')
+
+
+def build(out, *sources, flags=()):
+    """Run the tool over local files only and assert it succeeded."""
+    proc = subprocess.run([sys.executable, str(SCRIPT), str(out), *map(str, sources), *flags],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise AssertionError(f'tool failed ({proc.returncode})\n{proc.stderr}')
+    return proc
+
+
+def hashes_of(path):
+    data = pathlib.Path(path).read_bytes()
+    assert len(data) % HASH_BYTES == 0, 'blob must be whole 5-byte entries'
+    return {int.from_bytes(data[i:i + HASH_BYTES], 'little')
+            for i in range(0, len(data), HASH_BYTES)}
 
 
 class BuildBlocklistTests(unittest.TestCase):
@@ -16,15 +40,179 @@ class BuildBlocklistTests(unittest.TestCase):
             source.write_text('0.0.0.0 ads.example.com tracker.example.com # comment\n'
                               '127.0.0.1 metrics.example.com\n', encoding='utf-8')
 
-            subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name('build_blocklist.py')),
-                            str(output), str(source)], check=True, capture_output=True, text=True)
+            build(output, source)
+
+            self.assertEqual(hashes_of(output),
+                             {fnv(domain.encode()) for domain in
+                              ('ads.example.com', 'tracker.example.com', 'metrics.example.com')})
+
+    def test_hda_plain_domain_list_is_parsed(self):
+        """home-dns-adblock's dist/domains.txt is a comment header + plain domains."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'domains.txt'
+            source.write_text('# Home DNS Adblock -- plain domain list\n'
+                              '# 规则指纹: deadbeef\n'
+                              'ads0-normal-lq.zijieapi.com\n'
+                              'ad.toutiao.com\n'
+                              '\n'
+                              'p3-ad-sign.byteimg.com\n', encoding='utf-8')
+            output = root / 'blocklist.bin'
+
+            build(output, source)
+
+            self.assertEqual(hashes_of(output),
+                             {fnv(d.encode()) for d in ('ads0-normal-lq.zijieapi.com',
+                                                        'ad.toutiao.com',
+                                                        'p3-ad-sign.byteimg.com')})
+
+    def test_protect_list_strips_playback_parents(self):
+        """The playback parent goes; a whitelisted ad subdomain stays."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'domains.txt'
+            source.write_text('qznovelvod.com\n'
+                              'v5-reading-ad.qznovelvod.com\n'
+                              'ads.example.com\n'
+                              'cdn.qznovelvod.com\n', encoding='utf-8')
+            output = root / 'blocklist.bin'
+
+            build(output, source)
+
+            self.assertEqual(hashes_of(output),
+                             {fnv(b'v5-reading-ad.qznovelvod.com'), fnv(b'ads.example.com')})
+
+    def test_protect_keeps_ad_subdomains_but_drops_video_and_parent(self):
+        """Mirrors home-dns-adblock's own whitelist: qznovelvod.com carries the real
+        video so the parent must go, *-reading-ad subdomains are ad endpoints that stay
+        blocked, and a *-reading-video subdomain is real playback and must go too."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'domains.txt'
+            source.write_text('qznovelvod.com\n'
+                              'v5-reading-ad.qznovelvod.com\n'
+                              'v100-se-sjy-daily-reading-ad.qznovelvod.com\n'
+                              'v5-reading-video.qznovelvod.com\n'
+                              'ads.example.com\n', encoding='utf-8')
+            output = root / 'blocklist.bin'
+
+            build(output, source)
+
+            kept = hashes_of(output)
+            self.assertIn(fnv(b'v5-reading-ad.qznovelvod.com'), kept,
+                          'ad endpoint subdomain must stay blocked')
+            self.assertIn(fnv(b'v100-se-sjy-daily-reading-ad.qznovelvod.com'), kept,
+                          'marker must cover every vNNN generation, not a fixed list')
+            self.assertIn(fnv(b'ads.example.com'), kept)
+            self.assertNotIn(fnv(b'qznovelvod.com'), kept,
+                             'the playback parent itself must never be blocked')
+            self.assertNotIn(fnv(b'v5-reading-video.qznovelvod.com'), kept,
+                             'a real video subdomain must not be blocked')
+
+    def test_no_protect_flag_keeps_everything(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'domains.txt'
+            source.write_text('qznovelvod.com\nads.example.com\n', encoding='utf-8')
+            output = root / 'blocklist.bin'
+
+            build(output, source, flags=('--no-protect',))
+
+            self.assertEqual(hashes_of(output),
+                             {fnv(b'qznovelvod.com'), fnv(b'ads.example.com')})
+
+    def test_protect_file_replaces_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'domains.txt'
+            source.write_text('qznovelvod.com\nkeepme.example.com\n', encoding='utf-8')
+            protect = root / 'protect.txt'
+            protect.write_text('# custom protect list\nkeepme.example.com\n', encoding='utf-8')
+            output = root / 'blocklist.bin'
+
+            build(output, source, flags=('--protect-file', str(protect)))
+
+            self.assertEqual(hashes_of(output), {fnv(b'qznovelvod.com')})
+
+    def test_repeated_source_reports_its_own_size_not_net_new(self):
+        """A source listing only domains already seen must NOT look empty: the shrink
+        guard counts what a source lists, not what it newly contributes."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            a = root / 'a.txt'
+            a.write_text('one.example.com\ntwo.example.com\n', encoding='utf-8')
+            b = root / 'b.txt'
+            b.write_text('one.example.com\ntwo.example.com\n', encoding='utf-8')
+            output = root / 'blocklist.bin'
+
+            proc = build(output, a, b)
+
+            self.assertIn('-> 2 domains', proc.stderr)
+            self.assertEqual(hashes_of(output),
+                             {fnv(b'one.example.com'), fnv(b'two.example.com')})
+
+    def test_blob_is_sorted_deduped_five_byte_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'domains.txt'
+            source.write_text('b.example.com\na.example.com\nb.example.com\n', encoding='utf-8')
+            output = root / 'blocklist.bin'
+
+            build(output, source)
 
             data = output.read_bytes()
-            hashes = {int.from_bytes(data[i:i + HASH_BYTES], 'little')
-                      for i in range(0, len(data), HASH_BYTES)}
-            expected = {fnv(domain.encode()) for domain in
-                        ('ads.example.com', 'tracker.example.com', 'metrics.example.com')}
-            self.assertEqual(hashes, expected)
+            self.assertEqual(len(data), HASH_BYTES * 2)
+            values = [int.from_bytes(data[i:i + HASH_BYTES], 'little')
+                      for i in range(0, len(data), HASH_BYTES)]
+            self.assertEqual(values, sorted(values), 'firmware binary-searches this blob')
+
+
+class GuardTests(unittest.TestCase):
+    """The pure helpers behind the CI guards, tested without any network I/O."""
+
+    def test_shrunk_hda_source_is_rejected(self):
+        self.assertTrue(HDA_DOMAINS.startswith('https://'),
+                        'the HDA source must stay a stable URL, not a vendored copy')
+        self.assertFalse(check_required_source(HDA_DOMAINS, HDA_MIN_DOMAINS - 1),
+                         'a list that parses to almost nothing must fail the build')
+        self.assertTrue(check_required_source(HDA_DOMAINS, HDA_MIN_DOMAINS))
+
+    def test_unrelated_source_is_not_held_to_the_hda_floor(self):
+        """StevenBlack/Hagezi legitimately shrink or grow; only HDA is guarded."""
+        self.assertTrue(check_required_source('https://example.com/hosts', 0))
+
+    def test_protect_matches_exact_and_subdomains_only(self):
+        protect = ['qznovelvod.com']
+        self.assertTrue(is_protected('qznovelvod.com', protect))
+        self.assertTrue(is_protected('v5.qznovelvod.com', protect))
+        self.assertFalse(is_protected('notqznovelvod.com', protect),
+                         'suffix matching must not leak to lookalike domains')
+        self.assertFalse(is_protected('qznovelvod.com.evil.net', protect))
+        self.assertFalse(is_protected('other.com', protect))
+
+    def test_default_protect_covers_cn_playback_parents(self):
+        from build_blocklist import DEFAULT_PROTECT
+        for parent in ('qznovelvod.com', 'fqnovelpic.com', 'douyincdn.com', 'douyinliving.com'):
+            self.assertIn(parent, DEFAULT_PROTECT)
+
+    def test_strip_protected_keeps_only_ad_endpoints(self):
+        """The parent goes, marker-matched ad subdomains stay, other subdomains go."""
+        domains = {'qznovelvod.com', 'v5-reading-ad.qznovelvod.com',
+                   'cdn.qznovelvod.com', 'ads.example.com'}
+        self.assertEqual(strip_protected(domains, ['qznovelvod.com']),
+                         ['cdn.qznovelvod.com', 'qznovelvod.com'])
+
+    def test_ad_endpoint_marker_is_not_a_loose_substring(self):
+        """A lookalike label must not sneak past the marker test."""
+        protect = ['qznovelvod.com']
+        self.assertTrue(is_ad_endpoint('v5-reading-ad.qznovelvod.com', protect))
+        self.assertFalse(is_ad_endpoint('not-reading-ad-really.qznovelvod.com', protect),
+                         'the label must END with the marker')
+        self.assertFalse(is_ad_endpoint('reading-ad.qznovelvod.com.evil.net', protect),
+                         'must genuinely be under the protected parent')
+        self.assertFalse(is_ad_endpoint('v5-reading-video.qznovelvod.com', protect))
+        self.assertFalse(is_ad_endpoint('qznovelvod.com', protect),
+                         'the parent itself is not an ad endpoint')
 
 
 if __name__ == '__main__':

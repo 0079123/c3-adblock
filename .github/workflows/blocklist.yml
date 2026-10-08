@@ -1,12 +1,21 @@
 name: blocklist
 
 # Rebuilds the default blocklist weekly and publishes it at a stable URL:
-#   https://github.com/M-Abozaid/esp32-c3-adblock/releases/download/blocklist/blocklist.bin
+#   https://github.com/0079123/c3-adblock/releases/download/blocklist/blocklist.bin
 # Point a device's "Remote auto-update" at that URL and it stays current on its own.
+#
+# The list merges StevenBlack + Hagezi Light with home-dns-adblock's CN app rules
+# (Douyin/Fanqie/Hongguo/Xiaohongshu/Amap), pulled live from that repo's dist/ so
+# upstream rule updates land here with no edit. See tools/build_blocklist.py.
 on:
   schedule:
     - cron: "17 4 * * 1"   # Mondays 04:17 UTC
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/build_blocklist.py'
+      - '.github/workflows/blocklist.yml'
 
 permissions:
   contents: write
@@ -19,8 +28,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build default blocklist (fails if any source is unreachable)
-        run: python3 tools/build_blocklist.py blocklist.bin 2>&1 | tee build.log
+      - name: Build default blocklist (fails if any source is unreachable or shrunk)
+        run: python3 tools/build_blocklist.py blocklist.bin --with-hda 2>&1 | tee build.log
       - name: Sanity checks
         run: |
           size=$(stat -c%s blocklist.bin)
@@ -28,12 +37,21 @@ jobs:
           test $((size % 5)) -eq 0                  # whole 40-bit entries
           test "$size" -gt 250000                   # >50k entries, catches a silently shrunk list
           test "$size" -lt 1300000                  # fits the dual-OTA filesystem partition
+          # The CN rules must actually be in the blob -- if upstream moves or renames
+          # dist/domains.txt the build above fails, but this catches a parse regression
+          # that still yields a plausible total size.
+          grep -q 'home-dns-adblock' build.log
+          echo "CN rules source present in build log"
       - name: Publish to the 'blocklist' release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           entries=$(( $(stat -c%s blocklist.bin) / 5 ))
-          notes="Auto-built $(date -u +%F) — ${entries} entries (StevenBlack base + Hagezi Light).
+          notes="Auto-built $(date -u +%F) — ${entries} entries.
+          Sources: StevenBlack base + Hagezi Light + home-dns-adblock (CN app ads).
+
+          Playback-safe: qznovelvod.com / fqnovelpic.com / douyincdn.com / douyinliving.com
+          are excluded, with *-reading-ad.* ad endpoints kept blocked via their own hash.
 
           Set this as the device's Remote auto-update URL:
           https://github.com/${{ github.repository }}/releases/download/blocklist/blocklist.bin"

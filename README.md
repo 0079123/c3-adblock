@@ -108,6 +108,33 @@ un-blocks that exact entry — it can't carve a subdomain out of a blocked paren
 can't be downloaded the build stops instead of silently producing a smaller list
 (`--allow-missing` to override).
 
+### Chinese app ads (home-dns-adblock rules)
+
+`--with-hda` appends [home-dns-adblock](https://github.com/abclq/home-dns-adblock)'s rules —
+CN app ad/tracker domains for Douyin, Fanqie, Hongguo, Xiaohongshu and Amap, extracted from
+real device DNS logs. The rules are pulled **live from that repo's `dist/domains.txt`** on
+every build, so upstream updates land here automatically with nothing to sync:
+
+```bash
+python3 tools/build_blocklist.py data/blocklist.bin --with-hda
+```
+
+The weekly GitHub Actions release uses this flag, so the published `blocklist.bin` already
+includes the CN rules.
+
+**Playback protection.** Because the firmware blocks a domain *and all of its subdomains*,
+one over-broad parent rule would take the real video down with the ads. The build therefore
+excludes these playback parents: `qznovelvod.com` (Hongguo/Fanqie video), `fqnovelpic.com`
+(image CDN), `douyincdn.com`, `douyinliving.com`, `ecombdimg.com`, `ecombdapi.com`. Ad
+endpoints that live *under* a playback parent are kept — home-dns-adblock marks those with a
+`-reading-ad.` label (`v5-reading-ad.qznovelvod.com`) while the real stream uses
+`-reading-video.`, so the ad hosts stay blocked by their own hash.
+
+Tune it with `--no-protect` (disable entirely) or `--protect-file F` (replace the list with
+your own, one domain per line). The build fails if the CN source yields fewer than
+`HDA_MIN_DOMAINS` domains, so a moved or renamed upstream file can't silently publish a
+list missing the CN rules.
+
 ### WiFi setup (no re-flash needed)
 
 If it can't connect (or you never set `secrets.h`), it starts an open access point
@@ -125,7 +152,7 @@ The dashboard at **http://c3adblock.local** does it all:
   URL under *Remote auto-update* and the device pulls a prebuilt `blocklist.bin`
   on a schedule. A fresh default list is rebuilt **every Monday** by GitHub Actions and
   published at a stable URL, so pasting this once keeps a device current on its own:
-  `https://github.com/M-Abozaid/esp32-c3-adblock/releases/download/blocklist/blocklist.bin`
+  `https://github.com/0079123/c3-adblock/releases/download/blocklist/blocklist.bin`
 - **Firmware** — upload `.pio/build/c3/firmware.bin` under *Firmware → OTA update*; the
   device verifies it and reboots into the new image. Or push over WiFi from the CLI:
   ```bash

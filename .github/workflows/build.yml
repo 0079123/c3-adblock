@@ -38,5 +38,10 @@ jobs:
           printf '||ads.example.com^\n@@||ok.example.org^\n||ok.example.org^\n0.0.0.0 hosts.example.com\nplain.example.com\n/^regex$/\n' > t.txt
           python3 tools/build_blocklist.py t.bin t.txt
           test "$(stat -c%s t.bin)" -eq 15   # 3 entries x 5 bytes
+      - name: Playback-protect keeps CN ad endpoints but never the video parent
+        run: |
+          printf 'qznovelvod.com\nv5-reading-ad.qznovelvod.com\nv26-se-daily-reading-ad.qznovelvod.com\nv5-reading-video.qznovelvod.com\n' > p.txt
+          python3 tools/build_blocklist.py p.bin p.txt
+          test "$(stat -c%s p.bin)" -eq 10   # 2 entries: the two ad subdomains
       - name: Unit tests
         run: python3 -m unittest discover -s tools -p 'test_*.py' -v
