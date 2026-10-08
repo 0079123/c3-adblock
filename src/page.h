@@ -37,8 +37,9 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 <div id=uploadHint style="color:#8b949e;font-size:12px;margin-bottom:18px"></div>
 <h2 id=hRemote></h2>
 <div style=margin-bottom:6px><input id=uurl placeholder="https://host/blocklist.bin" size=40> <span id=lblEvery></span> <input id=uiv size=2 value=24>h
-<button id=btnSave onclick=saveUpd()></button> <button id=btnFetch onclick=fetchNow()></button></div>
+<button id=btnSave onclick=saveUpd()></button> <button id=btnFetch onclick=fetchNow()></button> <button id=btnResetUpd onclick=resetUpd()></button></div>
 <div style="color:#8b949e;font-size:12px;margin-bottom:18px"><span id=remoteHint></span> <span id=lblLast></span> <span id=ustat>&mdash;</span></div>
+<div id=upBadge style="font-size:12px;margin:-12px 0 18px"></div>
 <h2 id=hFw></h2>
 <form id=fwf style=margin-bottom:6px><input type=file id=fwb accept=.bin><button id=btnFw></button> <span id=fwmsg style=color:#8b949e></span></form>
 <div id=fwHint style="color:#8b949e;font-size:12px;margin-bottom:18px"></div>
@@ -57,6 +58,8 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  uploadHint:'用 tools/build_blocklist.py 生成 blocklist.bin 后在此上传 — 无需 USB',
  hRemote:'规则库 — 远程自动更新 (REMOTE AUTO-UPDATE)',lblEvery:'每',btnSave:'保存',btnFetch:'立即拉取',
  remoteHint:'设备会按周期拉取预编译好的 blocklist.bin（例如 GitHub release 资源）。',lblLast:'上次：',
+ btnResetUpd:'恢复默认订阅',updDefault:'✓ 使用默认订阅（已启用，每 {h} 小时自动更新）',
+ updCustom:'⚙ 使用自定义订阅',updOff:'⚠ 自动更新已关闭 —— 规则不会刷新',
  hFw:'固件 — OTA 升级 (FIRMWARE)',btnFw:'刷入固件',
  fwHint:'上传 .pio/build/c3/firmware.bin — 设备会校验后重启进入新固件',
  hWifi:'WiFi 设置',btnForget:'忘记 WiFi 并重启到配网页面',
@@ -74,6 +77,8 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  uploadHint:'build blocklist.bin with tools/build_blocklist.py, then upload here — no USB',
  hRemote:'BLOCKLIST — REMOTE AUTO-UPDATE',lblEvery:'every',btnSave:'Save',btnFetch:'Fetch now',
  remoteHint:'device pulls a prebuilt blocklist.bin on a schedule (e.g. a GitHub release asset).',lblLast:'last:',
+ btnResetUpd:'Restore default',updDefault:'✓ Using the default subscription (enabled, every {h}h)',
+ updCustom:'⚙ Using a custom subscription',updOff:'⚠ Auto-update is OFF -- rules will not refresh',
  hFw:'FIRMWARE — OTA UPDATE',btnFw:'Flash firmware',
  fwHint:'upload .pio/build/c3/firmware.bin — device verifies it and reboots into it',
  hWifi:'WIFI',btnForget:'Forget WiFi and reboot into the setup portal',
@@ -94,6 +99,7 @@ function applyLang(l){lang=l;try{localStorage.setItem('c3lang',l)}catch(e){}
  hCustom.textContent=t('hCustom');btnAddDom.textContent=t('btnAddDom');
  hUpload.textContent=t('hUpload');btnUpload.textContent=t('btnUpload');uploadHint.textContent=t('uploadHint');
  hRemote.textContent=t('hRemote');lblEvery.textContent=t('lblEvery');btnSave.textContent=t('btnSave');btnFetch.textContent=t('btnFetch');
+ btnResetUpd.textContent=t('btnResetUpd');
  remoteHint.textContent=t('remoteHint');lblLast.textContent=t('lblLast');
  hFw.textContent=t('hFw');btnFw.textContent=t('btnFw');fwHint.textContent=t('fwHint');
  hWifi.textContent=t('hWifi');btnForget.textContent=t('btnForget');
@@ -125,11 +131,16 @@ ct.tBodies[0].innerHTML=s.clients.sort((a,b)=>(b.blocked+b.allowed)-(a.blocked+a
 cl.tBodies[0].innerHTML=s.custom.map(d=>`<tr><td>${esc(d)}</td><td style=text-align:right><button class=rmbtn data-d="${esc(d)}">${t('remove')}</button></td></tr>`).join('')||`<tr><td style=color:#8b949e>${t('noneYet')}</td></tr>`;
 if(document.activeElement!=uurl)uurl.value=s.upurl||'';
 if(document.activeElement!=uiv)uiv.value=s.upiv||24;
-ustat.textContent=s.upstat||'—';}
+ustat.textContent=s.upstat||'—';
+var hasUrl=!!(s.upurl&&s.upurl.length);
+upBadge.style.color=hasUrl?(s.upcustom?'#8b949e':'#3fb950'):'#f0883e';
+upBadge.textContent=!hasUrl?t('updOff')
+  :(s.upcustom?t('updCustom'):t('updDefault').replace('{h}',s.upiv||24));}
 function addDom(){let d=dom.value.trim();if(d){fetch('/addblock?d='+encodeURIComponent(d),{headers:CSRF_HDRS}).then(()=>{dom.value='';load()})}}
 ct.addEventListener('click',e=>{if(e.target.classList.contains('ban'))fetch('/ban?ip='+e.target.dataset.ip,{headers:CSRF_HDRS}).then(load)});
 cl.addEventListener('click',e=>{if(e.target.classList.contains('rmbtn'))fetch('/unblock?d='+encodeURIComponent(e.target.dataset.d),{headers:CSRF_HDRS}).then(load)});
 function saveUpd(){fetch('/setupdate?u='+encodeURIComponent(uurl.value.trim())+'&h='+(parseInt(uiv.value)||24),{headers:CSRF_HDRS}).then(load)}
+function resetUpd(){if(!confirm(t('btnResetUpd')+'?'))return;fetch('/resetupdate',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>{ustat.textContent=x;load()})}
 function fetchNow(){ustat.textContent=t('updFetching');fetch('/fetchnow',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>{ustat.textContent=x;load()})}
 function forgetWifi(){if(!confirm(t('forgetConfirm')))return;fetch('/forgetwifi',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>alert(x))}
 fwf.onsubmit=async e=>{e.preventDefault();let f=fwb.files[0];if(!f)return;fwmsg.textContent=t('fwFlashing')+' '+(f.size/1048576).toFixed(2)+' MB...';

@@ -75,10 +75,70 @@ static const int MAX_BAN = 32;
 uint32_t bannedIP[MAX_BAN]; int numBanned = 0;
 
 // remote blocklist auto-update
-String updateUrl = "";              // URL of a prebuilt blocklist.bin (e.g. GitHub release asset)
-uint32_t updateIntervalH = 24;      // hours between auto-fetches
+//
+// A compiled-in default subscription, so a freshly flashed device keeps itself current
+// without anyone having to discover and paste a URL. Previously updateUrl started empty
+// and nothing fetched until the user filled the field by hand, which left a new unit on
+// whatever blocklist was baked into flash -- silently going stale over time.
+//
+// This is the fork's own daily release (see .github/workflows/blocklist.yml): GitHub
+// rebuilds blocklist.bin every day at 03:00 Beijing from Hagezi + anti-AD + 217heidai +
+// home-dns-adblock. Override with -D DEFAULT_UPDATE_URL=... at build time, or by editing
+// the field in the dashboard. Set it to "" to ship with auto-update off.
+#define BLOCKLIST_ASSET_PATH "0079123/c3-adblock/releases/download/blocklist/blocklist.bin"
+
+// Mainland-China reachability: github.com is frequently slow or unreachable from CN ISPs
+// (release assets are served from objects.githubusercontent.com, which is commonly
+// blocked), so a GitHub-only default would leave the device unable to update at all.
+// These are the well-known GitHub mirrors; each is tried in order until one returns a
+// complete file, and the reachable direct URL is tried first so non-CN users never take
+// the proxy detour. All three were verified to return a byte-identical blocklist.bin
+// (same SHA-256 as the direct download), so proxying does not alter the payload.
+//
+// Mirrors do go down or get rate-limited, which is why this is a list rather than a
+// single hardcoded host: one failing proxy just moves to the next.
+#ifndef DEFAULT_UPDATE_URL
+#define DEFAULT_UPDATE_URL "https://github.com/" BLOCKLIST_ASSET_PATH
+#endif
+// Comma-separated candidates used only when updateUrl is still the compiled-in default;
+// a user-entered URL is always used verbatim.
+#ifndef DEFAULT_UPDATE_MIRRORS
+#define DEFAULT_UPDATE_MIRRORS \
+  "https://github.com/" BLOCKLIST_ASSET_PATH "," \
+  "https://ghfast.top/https://github.com/" BLOCKLIST_ASSET_PATH "," \
+  "https://gh-proxy.com/https://github.com/" BLOCKLIST_ASSET_PATH "," \
+  "https://ghproxy.net/https://github.com/" BLOCKLIST_ASSET_PATH
+#endif
+#ifndef DEFAULT_UPDATE_INTERVAL_H
+#define DEFAULT_UPDATE_INTERVAL_H 24
+#endif
+
+String updateUrl = DEFAULT_UPDATE_URL;   // prebuilt blocklist.bin to pull on a schedule
+uint32_t updateIntervalH = DEFAULT_UPDATE_INTERVAL_H;  // hours between auto-fetches
 uint32_t lastCheckMs = 0;
 String updateStatus = "never";
+// Idle timeout while reading the body. Shortened while walking mirrors so a dead host
+// does not stall the whole cycle (4 mirrors x 15 s would be a minute of nothing).
+static const uint32_t FETCH_IDLE_MS = 15000;
+static const uint32_t FETCH_IDLE_MIRROR_MS = 6000;
+static uint32_t fetchIdleMs = FETCH_IDLE_MS;
+// Wait this long after boot before the first subscription fetch (WiFi + DNS settle first).
+static const uint32_t BOOT_FETCH_DELAY_MS = 20000;
+bool updateUrlCustom = false;       // true once the user sets/clears it themselves
+
+// Split a comma-separated candidate list, trimming each entry.
+static void splitUrls(const String& csv, String* out, int maxOut) {
+  int n = 0; unsigned start = 0;
+  while (start <= csv.length() && n < maxOut) {
+    int comma = csv.indexOf(',', start);
+    String part = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
+    part.trim();
+    if (part.length()) out[n++] = part;
+    if (comma < 0) break;
+    start = comma + 1;
+  }
+  while (n < maxOut) out[n++] = String();     // clear the remainder
+}
 
 // WiFi provisioning (captive portal)
 Preferences prefs;
@@ -352,7 +412,8 @@ static void handleStats() {
   String j = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"blocked\":" + totalBlocked + ",\"allowed\":" + totalAllowed +
              ",\"domains\":" + numHashes + ",\"rssi\":" + WiFi.RSSI() + ",\"temp\":" + String(temperatureRead(), 1) +
              ",\"heap\":" + ESP.getFreeHeap() + ",\"uptime\":\"" + ut + "\"" +
-             ",\"upurl\":\"" + jesc(updateUrl) + "\",\"upiv\":" + updateIntervalH + ",\"upstat\":\"" + jesc(updateStatus) + "\"" +
+             ",\"upurl\":\"" + jesc(updateUrl) + "\",\"upiv\":" + updateIntervalH + ",\"upstat\":\"" + jesc(updateStatus) + "\""
+             + ",\"upcustom\":" + (updateUrlCustom ? "true" : "false") +
              ",\"blocking\":" + (blockingOn ? "true" : "false") +
              ",\"resumeIn\":" + (uint32_t)(!blockingOn && resumeAt ? (resumeAt - millis()) / 1000 : 0) +
              ",\"defcreds\":" + ((strcmp(WEB_PASS, "CHANGE_ME_WEB_PASSWORD") == 0 || strcmp(OTA_PASS, "CHANGE_ME_OTA_PASSWORD") == 0) ? "true" : "false") +
@@ -486,11 +547,21 @@ static void handleUpload() {
 }
 
 // ---------- remote blocklist auto-update ----------
+// Absent /update.cfg means "never configured" -> keep the compiled-in defaults so
+// auto-update is on out of the box. Only a file the user actually saved overrides them,
+// which is why an empty URL is only honoured when updateUrlCustom is set (otherwise a
+// blank line would silently disable the default subscription).
 static void loadUpdateCfg() {
-  File f = LittleFS.open("/update.cfg", "r"); if (!f) return;
-  updateUrl = f.readStringUntil('\n'); updateUrl.trim();
-  String iv = f.readStringUntil('\n'); iv.trim(); if (iv.length()) updateIntervalH = iv.toInt();
-  f.close(); if (updateIntervalH < 1) updateIntervalH = 1;
+  File f = LittleFS.open("/update.cfg", "r");
+  if (!f) { Serial.printf("[update] no cfg -> default %s every %uh\n",
+                          updateUrl.c_str(), (unsigned)updateIntervalH); return; }
+  String u = f.readStringUntil('\n'); u.trim();
+  String iv = f.readStringUntil('\n'); iv.trim();
+  f.close();
+  updateUrl = u;
+  updateUrlCustom = true;                        // a saved file means the user chose this
+  if (iv.length()) updateIntervalH = iv.toInt();
+  if (updateIntervalH < 1) updateIntervalH = 1;
 }
 static void saveUpdateCfg() {
   File f = LittleFS.open("/update.cfg", "w"); if (!f) return;
@@ -528,7 +599,7 @@ static bool fetchBlocklist(String url) {
   while (http.connected() && (len < 0 || (int)total < len)) {
     size_t avail = stream->available();
     if (avail) { int n = stream->readBytes(b, avail > sizeof(b) ? sizeof(b) : avail); if (n > 0) { f.write(b, n); total += n; idle = millis(); } }
-    else { if (millis() - idle > 15000) break; delay(2); }
+    else { if (millis() - idle > fetchIdleMs) break; delay(2); }
   }
   f.close(); http.end();
   // Reject a short transfer here rather than letting commitNewBlocklist decide: a severed
@@ -546,6 +617,32 @@ static bool fetchBlocklist(String url) {
   updateStatus = ok ? ("ok: " + String(numHashes) + " domains") : ("bad data (" + String(total) + "B)");
   Serial.printf("[remote] %s\n", updateStatus.c_str());
   return ok;
+}
+
+// Fetch the subscription, trying the compiled-in mirror list in order.
+//
+// Only used while the URL is still the built-in default -- a URL the user typed is honoured
+// exactly (no silent substitution), so a private/intranet source can't be "helpfully"
+// rerouted. Whichever candidate succeeds becomes updateUrl, so later polls retry the mirror
+// that actually worked instead of re-walking a dead list every time.
+static bool fetchDefaultBlocklist() {
+  String cands[6];
+  splitUrls(DEFAULT_UPDATE_MIRRORS, cands, 6);
+  bool any = false;
+  for (int i = 0; i < 6 && cands[i].length(); i++) {
+    if (i) Serial.printf("[remote] trying mirror %d/%d\n", i + 1, 6);
+    fetchIdleMs = i ? FETCH_IDLE_MIRROR_MS : FETCH_IDLE_MS;
+    bool got = fetchBlocklist(cands[i]);
+    fetchIdleMs = FETCH_IDLE_MS;
+    if (got) {
+      if (updateUrl != cands[i]) { updateUrl = cands[i]; saveUpdateCfg(); }
+      return true;
+    }
+    any = true;
+  }
+  updateStatus = any ? "all mirrors failed" : "no url set";
+  Serial.printf("[remote] %s\n", updateStatus.c_str());
+  return false;
 }
 
 // ---------- firmware OTA (browser upload of firmware.bin -> reboot) ----------
@@ -793,12 +890,26 @@ void setup() {
     prefs.begin("wifi", false); prefs.clear(); prefs.end(); delay(500); ESP.restart(); });
   web.on("/upload", HTTP_POST, handleUploadDone, handleUpload);      // blocklist OTA (auth inside handleUpload)
   web.on("/update", HTTP_POST, handleFwUpdateDone, handleFwUpload);  // firmware OTA (auth inside handleFwUpload)
-  web.on("/fetchnow", []() { if (!requireAuth()) return; fetchBlocklist(updateUrl); web.send(200, "text/plain", updateStatus); });
+  web.on("/fetchnow", []() { if (!requireAuth()) return;
+    if (updateUrlCustom) fetchBlocklist(updateUrl); else fetchDefaultBlocklist();
+    web.send(200, "text/plain", updateStatus); });
   web.on("/setupdate", []() {
     if (!requireAuth()) return;
-    if (web.hasArg("u")) updateUrl = web.arg("u");
+    if (web.hasArg("u")) { updateUrl = web.arg("u"); updateUrl.trim(); updateUrlCustom = true; }
     if (web.hasArg("h")) { updateIntervalH = web.arg("h").toInt(); if (updateIntervalH < 1) updateIntervalH = 1; }
+    updateStatus = updateUrl.length() ? "scheduled" : "auto-update off";
     saveUpdateCfg(); web.send(200, "text/plain", "ok");
+  });
+  // Restore the built-in subscription after the user cleared it.
+  web.on("/resetupdate", []() {
+    if (!requireAuth()) return;
+    updateUrl = DEFAULT_UPDATE_URL;
+    updateIntervalH = DEFAULT_UPDATE_INTERVAL_H;
+    updateUrlCustom = false;
+    updateStatus = "reset to default";
+    LittleFS.remove("/update.cfg");                 // fall back to the compiled-in defaults
+    lastCheckMs = millis() - (BOOT_FETCH_DELAY_MS ? BOOT_FETCH_DELAY_MS : 0);  // fetch soon
+    web.send(200, "text/plain", updateUrl.length() ? updateUrl : "(no default compiled in)");
   });
   web.begin();
   ArduinoOTA.setHostname("c3adblock");   // pio run -t upload --upload-port c3adblock.local
@@ -814,8 +925,23 @@ void loop() {
   if (!blockingOn && resumeAt && (int32_t)(millis() - resumeAt) >= 0) { blockingOn = true; resumeAt = 0; }
   if (updateUrl.length()) {               // periodic remote blocklist auto-update
     uint32_t now = millis();
-    if (lastCheckMs == 0) lastCheckMs = now;   // skip an immediate fetch on boot
-    else if (now - lastCheckMs >= updateIntervalH * 3600000UL) { lastCheckMs = now; fetchBlocklist(updateUrl); }
+    // Fetch shortly after boot instead of waiting a full interval: a freshly flashed unit
+    // carries a snapshot from build time, and the previous "skip the first check" behaviour
+    // meant it stayed on that snapshot for the first interval (24 h) after every reboot.
+    // Deferred by BOOT_FETCH_DELAY_MS so WiFi/DNS have settled and the dashboard is up.
+    // Use the mirror list only while the URL is still the built-in default; a URL the user
+    // typed is used as-is.
+    if (lastCheckMs == 0) {
+      if (now >= BOOT_FETCH_DELAY_MS) {
+        lastCheckMs = now;
+        Serial.println("[update] first fetch after boot");
+        if (updateUrlCustom) fetchBlocklist(updateUrl); else fetchDefaultBlocklist();
+      }
+    }
+    else if (now - lastCheckMs >= updateIntervalH * 3600000UL) {
+      lastCheckMs = now;
+      if (updateUrlCustom) fetchBlocklist(updateUrl); else fetchDefaultBlocklist();
+    }
   }
   if (!busy) delay(1);   // sleep only when idle: full speed under load, cool when quiet
 }
