@@ -174,32 +174,54 @@ uint32_t bannedIP[MAX_BAN]; int numBanned = 0;
 // concrete hostnames instead of guesswork: start capture, reproduce the ad in the app,
 // then read the list to see exactly what was asked for and whether it was blocked.
 //
-// RAM-backed on purpose. Writing each query to LittleFS would wear the flash and block the
-// DNS loop; this ring keeps the newest N entries and never touches disk.
-// 96 x (128-byte domain + 9 bytes) ~= 13 KB, comfortably inside the ~120 KB free heap.
-static const int CAPTURE_SIZE = 96;
-static const int CAPTURE_DOMAIN_MAX = 96;
+// RAM-backed on purpose: a flash write per query would wear the device and block the DNS
+// loop.
+//
+// Aggregated by unique domain rather than kept as a raw event ring. The 96-slot ring looked
+// fine in testing but lost data in practice: one app (Douyin live) issues hundreds of pull-*
+// queries in seconds and overwrote everything else, so a 1511-query session exported 96
+// rows of a single platform. Keying on the domain collapses 1511 queries to the distinct
+// names actually seen (typically a few hundred), keeps every one, and the hit count is more
+// useful for analysis than duplicate rows.
+static const int CAPTURE_SIZE = 256;        // distinct domains retained
+static const int CAPTURE_DOMAIN_MAX = 80;   // longest name kept intact (DNS labels cap at 253)
 struct CapEntry {
   char     domain[CAPTURE_DOMAIN_MAX];
-  uint32_t ip;            // client that asked
-  uint32_t ms;            // millis() when recorded; 0 means the slot is still empty
+  uint32_t ip;            // last client that asked
+  uint32_t firstMs, lastMs;
+  uint16_t hits;          // times this domain was seen, saturating at 65535
   uint8_t  qtype;
-  bool     blocked;
+  bool     used, blocked;
 };
 static CapEntry capBuf[CAPTURE_SIZE];
-static uint32_t capTotal = 0;          // entries recorded since the last clear
+static uint32_t capQueries = 0;            // total queries recorded since the last clear
+static bool     capOverflow = false;       // set when a distinct domain had nowhere to go
 static bool     capOn = false;
-static String   capFilter;             // substring filter; empty records everything
+static String   capFilter;                 // substring filter; empty records everything
 
 static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool blocked) {
   if (!capOn) return;
   if (capFilter.length() && String(domain).indexOf(capFilter) < 0) return;
-  CapEntry& e = capBuf[capTotal % CAPTURE_SIZE];
-  strncpy(e.domain, domain, CAPTURE_DOMAIN_MAX - 1);
-  e.domain[CAPTURE_DOMAIN_MAX - 1] = 0;
-  e.ip = ip; e.qtype = qtype; e.blocked = blocked;
-  e.ms = millis(); if (!e.ms) e.ms = 1;   // 0 marks an empty slot, so never store 0
-  capTotal++;
+  capQueries++;
+  for (int i = 0; i < CAPTURE_SIZE; i++) {              // already seen? just count it
+    CapEntry& e = capBuf[i];
+    if (e.used && strcmp(e.domain, domain) == 0) {
+      if (e.hits < 0xFFFF) e.hits++;
+      e.ip = ip; e.qtype = qtype; e.blocked = blocked; e.lastMs = millis();
+      return;
+    }
+  }
+  for (int i = 0; i < CAPTURE_SIZE; i++) {              // new domain: claim a free slot
+    CapEntry& e = capBuf[i];
+    if (e.used) continue;
+    e.used = true;
+    strncpy(e.domain, domain, CAPTURE_DOMAIN_MAX - 1);
+    e.domain[CAPTURE_DOMAIN_MAX - 1] = 0;
+    e.ip = ip; e.qtype = qtype; e.blocked = blocked;
+    e.hits = 1; e.firstMs = e.lastMs = millis();
+    return;
+  }
+  capOverflow = true;   // table full: further distinct domains are dropped; shown in the UI
 }
 
 // remote blocklist auto-update
@@ -1096,7 +1118,10 @@ void setup() {
   // client list already exposed there), but starting/clearing requires auth.
   web.on("/capture", []() {
     if (!requireAuth()) return;
-    if (web.hasArg("clear")) { capTotal = 0; capOn = false; memset(capBuf, 0, sizeof(capBuf)); }
+    if (web.hasArg("clear")) {
+      capQueries = 0; capOn = false; capOverflow = false;
+      memset(capBuf, 0, sizeof(capBuf));
+    }
     // Starting a capture resets the filter unless one was given in the same request: a
     // leftover filter silently narrows the log, so the next capture looks like "this app
     // only asks for these domains" when it actually asks for far more. Default = record all.
@@ -1106,38 +1131,52 @@ void setup() {
     web.send(200, "application/json", String("{\"on\":") + (capOn ? "true" : "false") +
               ",\"filter\":\"" + jesc(capFilter) + "\"}");
   });
-  web.on("/capture.json", []() {
-    // Newest first, skipping slots that were never written.
+  // Distinct domains ordered by hit count, most-queried first: that ordering is what
+  // makes a capture readable when one chatty app dominates the raw query stream.
+  auto capSorted = [](const int **out) -> int {
+    static int order[CAPTURE_SIZE];
+    int n = 0;
+    for (int i = 0; i < CAPTURE_SIZE; i++) if (capBuf[i].used) order[n++] = i;
+    for (int a = 1; a < n; a++) {                 // insertion sort: n <= 256, mostly stable
+      int key = order[a], b = a - 1;
+      while (b >= 0 && (capBuf[order[b]].hits < capBuf[key].hits ||
+                        (capBuf[order[b]].hits == capBuf[key].hits &&
+                         capBuf[order[b]].lastMs < capBuf[key].lastMs))) { order[b + 1] = order[b]; b--; }
+      order[b + 1] = key;
+    }
+    *out = order;
+    return n;
+  };
+  const int *capOrder = nullptr;
+  web.on("/capture.json", [&capSorted, &capOrder]() {
+    int n = capSorted(&capOrder);
     String j = "{\"on\":" + String(capOn ? "true" : "false") +
-               ",\"total\":" + String(capTotal) +
+               ",\"queries\":" + String(capQueries) +
+               ",\"distinct\":" + String(n) +
+               ",\"overflow\":" + String(capOverflow ? "true" : "false") +
                ",\"filter\":\"" + jesc(capFilter) + "\",\"entries\":[";
-    bool first = true;
-    uint32_t n = (capTotal < CAPTURE_SIZE) ? capTotal : CAPTURE_SIZE;
-    for (uint32_t k = n; k > 0; k--) {
-      uint32_t idx = (capTotal - k) % CAPTURE_SIZE;
-      const CapEntry& e = capBuf[idx];
-      if (!e.ms) continue;
-      if (!first) j += ",";
-      first = false;
+    for (int k = 0; k < n; k++) {
+      const CapEntry& e = capBuf[capOrder[k]];
+      if (k) j += ",";
       IPAddress ip(e.ip);
-      j += "{\"t\":" + String(e.ms) + ",\"d\":\"" + jesc(String(e.domain)) +
-           "\",\"ip\":\"" + ip.toString() + "\",\"q\":" + String(e.qtype) +
-           ",\"b\":" + String(e.blocked ? "true" : "false") + "}";
+      j += "{\"d\":\"" + jesc(String(e.domain)) + "\",\"hits\":" + String(e.hits) +
+           ",\"ip\":\"" + ip.toString() + "\",\"q\":" + String(e.qtype) +
+           ",\"b\":" + String(e.blocked ? "true" : "false") +
+           ",\"first\":" + String(e.firstMs) + ",\"last\":" + String(e.lastMs) + "}";
     }
     j += "]}";
     web.send(200, "application/json", j);
   });
-  web.on("/capture.csv", []() {
-    // Plain text table for copy/paste into a spreadsheet or a bug report.
-    String csv = "seq,ms,domain,client,qtype,blocked\r\n";
-    uint32_t n = (capTotal < CAPTURE_SIZE) ? capTotal : CAPTURE_SIZE;
-    for (uint32_t k = n; k > 0; k--) {
-      uint32_t idx = (capTotal - k) % CAPTURE_SIZE;
-      const CapEntry& e = capBuf[idx];
-      if (!e.ms) continue;
+  web.on("/capture.csv", [&capSorted, &capOrder]() {
+    // One row per distinct domain, most-queried first, for a spreadsheet or a bug report.
+    int n = capSorted(&capOrder);
+    String csv = "rank,domain,hits,blocked,client,qtype,first_ms,last_ms\r\n";
+    for (int k = 0; k < n; k++) {
+      const CapEntry& e = capBuf[capOrder[k]];
       IPAddress ip(e.ip);
-      csv += String(capTotal - k + 1) + "," + String(e.ms) + ",\"" + String(e.domain) +
-             "\"," + ip.toString() + "," + String(e.qtype) + "," + String(e.blocked ? 1 : 0) + "\r\n";
+      csv += String(k + 1) + ",\"" + String(e.domain) + "\"," + String(e.hits) + "," +
+             String(e.blocked ? 1 : 0) + "," + ip.toString() + "," + String(e.qtype) +
+             "," + String(e.firstMs) + "," + String(e.lastMs) + "\r\n";
     }
     web.sendHeader("Content-Disposition", "attachment; filename=c3-dns-capture.csv");
     web.send(200, "text/csv", csv);

@@ -54,7 +54,7 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 <a id=capCsv href="/capture.csv" download><button id=btnCapCsv type=button></button></a>
 <span id=capState style="font-size:12px;color:#8b949e"></span></div>
 <div id=capHint style="color:#8b949e;font-size:12px;margin-bottom:8px"></div>
-<table id=capTbl style="display:none"><thead><tr><th id=thCapDomain></th><th id=thCapResult></th><th id=thCapClient></th></tr></thead><tbody></tbody></table>
+<table id=capTbl style="display:none"><thead><tr><th id=thCapDomain></th><th id=thCapHits></th><th id=thCapResult></th><th id=thCapClient></th></tr></thead><tbody></tbody></table>
 <h2 id=hWifi></h2>
 <div style=margin-bottom:18px><button id=btnForget onclick="forgetWifi()"></button></div>
 </div><script>
@@ -77,7 +77,8 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  hWifi:'WiFi 设置',btnForget:'忘记 WiFi 并重启到配网页面',
  hCap:'抓包 — DNS 查询记录 (CAPTURE)',
  btnCapStart:'开始抓包',btnCapStop:'停止抓包',btnCapApply:'应用过滤',btnCapClear:'清空',btnCapCsv:'下载 CSV',
- thCapDomain:'域名',thCapResult:'结果',thCapClient:'客户端',
+ thCapDomain:'域名',thCapHits:'次数',thCapResult:'结果',thCapClient:'客户端',
+ capQueries:'次查询',capDistinct:'个域名',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录',
  capOn:'● 抓包中',capOff:'○ 未抓包',capEmpty:'暂无记录 —— 点「开始抓包」，然后在 App 里复现广告',
  capHint:'点「开始抓包」后复现漏网的广告（开始时会【自动清空过滤】，确保抓到全部请求，之后再按需过滤）；下方列表和 CSV 会显示设备收到的全部查询，以及每一条是否被拦截。过滤框可只记录含指定关键词的域名（如 iqiyi）。',
  capBlocked:'已拦截',capAllowed:'放行',
@@ -103,7 +104,8 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  hWifi:'WIFI',btnForget:'Forget WiFi and reboot into the setup portal',
  hCap:'CAPTURE -- DNS query log',
  btnCapStart:'Start capture',btnCapStop:'Stop capture',btnCapApply:'Apply filter',btnCapClear:'Clear',btnCapCsv:'Download CSV',
- thCapDomain:'Domain',thCapResult:'Result',thCapClient:'Client',
+ thCapDomain:'Domain',thCapHits:'Hits',thCapResult:'Result',thCapClient:'Client',
+ capQueries:'queries',capDistinct:'domains',capFiltering:'filtering: ',capOverflow:'domain table full; new domains dropped',
  capOn:'● capturing',capOff:'○ idle',capEmpty:'no entries yet -- press Start capture, then reproduce the ad in the app',
  capHint:'Press Start capture, then reproduce the ad (this CLEARS the filter so everything is captured);  The list and CSV show every query the device received and whether each was blocked. The filter box records only domains containing a keyword (e.g. iqiyi).',
  capBlocked:'BLOCKED',capAllowed:'allowed',
@@ -131,7 +133,7 @@ function applyLang(l){lang=l;try{localStorage.setItem('c3lang',l)}catch(e){}
  hWifi.textContent=t('hWifi');btnForget.textContent=t('btnForget');
  hCap.textContent=t('hCap');btnCapApply.textContent=t('btnCapApply');btnCapClear.textContent=t('btnCapClear');
  btnCapCsv.textContent=t('btnCapCsv');capHint.textContent=t('capHint');
- thCapDomain.textContent=t('thCapDomain');thCapResult.textContent=t('thCapResult');thCapClient.textContent=t('thCapClient');
+ thCapDomain.textContent=t('thCapDomain');thCapHits.textContent=t('thCapHits');thCapResult.textContent=t('thCapResult');thCapClient.textContent=t('thCapClient');
  credwarnT.textContent=t('credWarnTitle');credwarnB.textContent=t('credWarnBody');
  credbarMsg.textContent=t('credMsg');btnLogin.textContent=t('btnLogin');
  // 登录条默认隐藏：页面本身免密，只有点动作按钮时才提示（见 api()）。
@@ -240,16 +242,20 @@ function fetchNow(){ustat.textContent=t('updFetching');api('/fetchnow').then(r=>
 var capIsOn=false;
 function capRender(j){
   capIsOn=j.on;
-  capState.textContent=(j.on?t('capOn'):t('capOff'))+'  '+(j.total||0)+' 条'
-    +(j.filter?('  &#8212; 过滤中: '+esc(j.filter)):'');
+  // queries = raw lookups seen; distinct = unique domains kept (the table row count).
+  capState.textContent=(j.on?t('capOn'):t('capOff'))+'  '+
+    (j.queries||0)+' '+t('capQueries')+' / '+(j.distinct||0)+' '+t('capDistinct')
+    +(j.filter?('  &#8212; '+t('capFiltering')+esc(j.filter)):'')
+    +(j.overflow?('  &#9888; '+t('capOverflow')):'');
   btnCapToggle.textContent=j.on?t('btnCapStop'):t('btnCapStart');
   btnCapToggle.style.background=j.on?'#8b2c2c':'#21262d';
   var es=j.entries||[];
   capTbl.style.display=es.length?'':'none';
   capTbl.tBodies[0].innerHTML = es.length? es.map(function(e){
-    return '<tr><td>'+esc(e.d)+'</td><td style="color:'+(e.b?'#f85149':'#3fb950')+'">'+
+    return '<tr><td>'+esc(e.d)+'</td><td style="color:#8b949e">'+fmt(e.hits||1)+'</td>'+
+      '<td style="color:'+(e.b?'#f85149':'#3fb950')+'">'+
       (e.b?t('capBlocked'):t('capAllowed'))+'</td><td style="color:#8b949e">'+esc(e.ip)+'</td></tr>';
-  }).join('') : ('<tr><td colspan=3 style=color:#8b949e>'+t('capEmpty')+'</td></tr>');
+  }).join('') : ('<tr><td colspan=4 style=color:#8b949e>'+t('capEmpty')+'</td></tr>');
 }
 function capLoad(){fetch('/capture.json').then(function(r){return r.json()}).then(capRender).catch(function(){})}
 function capToggle(){

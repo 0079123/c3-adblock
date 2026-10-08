@@ -3,6 +3,7 @@
 These run in CI on every push, so they must stay hermetic: every source here is a
 local temp file. Nothing in this module may touch the network.
 """
+import os
 import pathlib
 import subprocess
 import sys
@@ -10,12 +11,13 @@ import tempfile
 import unittest
 
 from build_blocklist import (ADBLOCKFILTERS_DOMAINS, ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS,
-                             DEFAULT_PROTECT, DEFAULT_SOURCES, HAGEZI_DOMAINS,
+                             CUSTOM_DOMAINS, DEFAULT_PROTECT, DEFAULT_SOURCES, HAGEZI_DOMAINS,
                              HASH_BYTES, HDA_DOMAINS, HDA_MIN_DOMAINS, check_required_source,
                              fnv, is_ad_endpoint, is_protected, prune_parent_redundant,
                              strip_protected)
 
 SCRIPT = pathlib.Path(__file__).with_name('build_blocklist.py')
+ROOT = SCRIPT.parent.parent
 
 
 def build(out, *sources, flags=()):
@@ -303,6 +305,25 @@ class GuardTests(unittest.TestCase):
         for endpoint in ('dns.weixin.qq.com', 'aedns.weixin.qq.com', 'dns.weixin.qq.com.cn'):
             self.assertTrue(is_protected(endpoint, DEFAULT_PROTECT),
                             f'{endpoint} must never be blocked')
+
+    def test_custom_domains_file_is_tracked_and_in_the_build(self):
+        """data/custom-domains.txt is the maintainer's own list and must always be part of
+        the default build -- and unlike blocklist.bin it must be committed, not ignored."""
+        self.assertIn(CUSTOM_DOMAINS, DEFAULT_SOURCES)
+        self.assertTrue(os.path.exists(CUSTOM_DOMAINS), f'missing {CUSTOM_DOMAINS}')
+        # committed, so CI (fresh checkout) sees it too
+        r = subprocess.run(['git', 'check-ignore', CUSTOM_DOMAINS], cwd=ROOT,
+                           capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0, 'custom-domains.txt must NOT be gitignored')
+
+    def test_custom_domains_reach_the_blob(self):
+        """A domain listed in the custom file must end up blocked in the output blob."""
+        with tempfile.TemporaryDirectory() as directory:
+            out = pathlib.Path(directory) / 'blocklist.bin'
+            subprocess.run([sys.executable, str(SCRIPT), str(out), CUSTOM_DOMAINS],
+                           check=True, capture_output=True, text=True)
+            got = hashes_of(out)
+            self.assertIn(fnv(b'tad.qq.com'), got, 'custom entry missing from blob')
 
     def test_default_sources_use_the_domain_variant_of_adblockfilters(self):
         """The headline adblockfilters.txt is URL-level filtering; only the domain-list

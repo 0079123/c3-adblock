@@ -1,0 +1,41 @@
+# 自定义拦截规则 / custom block rules — 由我维护，构建时自动并入 blocklist.bin
+#
+# 格式：一行一个域名（AdGuard `||domain^` 或裸域名都可），# 开头为注释。
+# 语义：拦该域名【及其所有子域】（固件按父域匹配）。
+# 生效：tools/build_blocklist.py 每次构建都会读取本文件；GitHub Actions
+#       每天 03:00（北京时间）自动重编译并发布，设备每天自动拉取。
+#
+# 添加前先抓包确认（Dashboard → 抓包 → 下载 CSV），只加【纯广告/追踪】域名。
+# 播放接口、登录、CDN 正片域加了会导致视频打不开。
+#
+# 已知【不能加】的（会和正片同域，加了播不了）：
+#   tv.video.qq.com / film.video.qq.com / pay.video.qq.com   腾讯视频正片与会员
+#   ups.youku.com                                            优酷播放接口(ad 与 stream 同接口返回)
+#   api.iqiyi.com / iface2.iqiyi.com                         爱奇艺业务接口
+#   pull-*.douyincdn.com / pull-*.douyinliving.com           抖音直播拉流
+
+# ---- 优酷 / Youku ----
+# 广告调度主域（覆盖 valp/valb/valc/valf/valo/vid/walp/fvid.atm.youku.com 等全部子域）
+atm.youku.com
+# 播放/行为统计
+stat.youku.com
+
+# ---- 腾讯视频 / Tencent Video ----
+# 广告脚本下发（tad = Tencent AD）
+tad.qq.com
+# 广告管理接口
+adsmng.qq.com
+# 广告投放/追踪（tdm = Tencent Data Management）
+tdm.td.qq.com
+
+# ---- 爱奇艺 / iQiyi ----
+# 广告联盟接口
+afp.qiyi.com
+
+# ---- 芒果TV / Mango TV ----
+# 说明：芒果的广告域 da.hunantv.com、mobaliyun.res.mgtv.com 已由上游规则集覆盖。
+# 以下三个语义不确定（可能是广告，也可能是运营/设备标识），默认注释，
+# 抓包确认后再取消注释，避免误伤播放。
+# as.mgtv.com
+# guid.mgtv.com
+# act.api.mgtv.com

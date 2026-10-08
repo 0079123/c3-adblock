@@ -62,6 +62,12 @@ ANTIAD_DOMAINS = 'https://raw.githubusercontent.com/privacy-protection-tools/ant
 # dedup, incl. Youku/iQiyi/MangoTV ad hosts and dns.weixin.qq.com (see DEFAULT_PROTECT).
 ADBLOCKFILTERS_DOMAINS = 'https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblockdomainlite.txt'
 
+# Maintainer's own list, kept in-repo (not gitignored) so CI and every local build pick it
+# up. Resolved relative to this script so the build works from any cwd. Add domains here
+# after confirming them from a device capture -- see the notes inside the file.
+CUSTOM_DOMAINS = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'custom-domains.txt'))
+
 # anti-AD is the largest CN source (~108k domains) and carries the web/app-ad surface.
 # If it silently truncates, folding in Hagezi still leaves a plausible-looking total, so
 # it gets its own floor alongside home-dns-adblock's.
@@ -71,6 +77,7 @@ DEFAULT_SOURCES = [
     HAGEZI_DOMAINS,             # Hagezi Light (wildcard = domain + subdomains)
     ANTIAD_DOMAINS,             # anti-AD: CN ads/trackers (web + app)
     ADBLOCKFILTERS_DOMAINS,     # 217heidai lite domain list: Youku/iQiyi/MangoTV ad hosts
+    CUSTOM_DOMAINS,             # data/custom-domains.txt: hand-picked additions
 ]
 
 # Appended by --with-hda AND always included by the weekly CI release (see DEFAULT_SOURCES
