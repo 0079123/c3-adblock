@@ -43,5 +43,7 @@ jobs:
           printf 'qznovelvod.com\nv5-reading-ad.qznovelvod.com\nv26-se-daily-reading-ad.qznovelvod.com\nv5-reading-video.qznovelvod.com\n' > p.txt
           python3 tools/build_blocklist.py p.bin p.txt
           test "$(stat -c%s p.bin)" -eq 10   # 2 entries: the two ad subdomains
+      - name: Embedded web UI checks
+        run: python3 tools/check_ui.py
       - name: Unit tests
         run: python3 -m unittest discover -s tools -p 'test_*.py' -v

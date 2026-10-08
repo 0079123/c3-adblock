@@ -25,7 +25,7 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 </div>
 <div id=blockbar style="display:flex;align-items:center;gap:12px;margin-bottom:14px;padding:12px 14px;background:#161b22;border:1px solid #30363d;border-radius:8px">
 <span id=blockdot style=font-size:20px>🛡️</span><b id=blockstate style=flex:1 data-on=1></b>
-<select id=pausedur style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px"></select>
+<select id=pausedur style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px"><option value=30></option><option value=300 selected></option><option value=1800></option><option value=0></option></select>
 <button id=pausebtn onclick=togglePause()></button></div>
 <div class=cards id=sys></div>
 <h2 id=hClients></h2><table id=ct><thead><tr><th id=thClient></th><th>MAC</th><th id=thBlocked></th><th id=thAllowed></th><th></th></tr></thead><tbody></tbody></table>
