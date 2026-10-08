@@ -37,21 +37,25 @@ jobs:
           test $((size % 5)) -eq 0                  # whole 40-bit entries
           test "$size" -gt 250000                   # >50k entries, catches a silently shrunk list
           test "$size" -lt 1300000                  # fits the dual-OTA filesystem partition
-          # The CN rules must actually be in the blob -- if upstream moves or renames
-          # dist/domains.txt the build above fails, but this catches a parse regression
-          # that still yields a plausible total size.
-          grep -q 'home-dns-adblock' build.log
-          echo "CN rules source present in build log"
+          # Every source must actually show up in the build. A moved/renamed upstream file
+          # already fails the build, but this catches a parse regression that still lands a
+          # plausible total size (Hagezi alone is ~57k, enough to mask a missing CN source).
+          for src in hagezi anti-AD home-dns-adblock; do
+            grep -q "$src" build.log || { echo "missing source in build: $src"; exit 1; }
+          done
+          echo "all sources present in build log"
       - name: Publish to the 'blocklist' release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           entries=$(( $(stat -c%s blocklist.bin) / 5 ))
           notes="Auto-built $(date -u +%F) — ${entries} entries.
-          Sources: StevenBlack base + Hagezi Light + home-dns-adblock (CN app ads).
+          Sources: Hagezi Light + anti-AD + home-dns-adblock (CN app ads).
 
-          Playback-safe: qznovelvod.com / fqnovelpic.com / douyincdn.com / douyinliving.com
-          are excluded, with *-reading-ad.* ad endpoints kept blocked via their own hash.
+          Tuned for CN networks (video/App/web ads). Playback-safe: qznovelvod.com,
+          fqnovelpic.com, douyincdn.com, douyinliving.com are excluded, with
+          *-reading-ad.* ad endpoints kept blocked via their own hash. Public DoH
+          resolvers (dns.alidns.com, doh.pub) are excluded so the LAN keeps DNS.
 
           Set this as the device's Remote auto-update URL:
           https://github.com/${{ github.repository }}/releases/download/blocklist/blocklist.bin"

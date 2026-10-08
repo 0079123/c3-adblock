@@ -80,9 +80,9 @@ One USB flash to get going — after that, **firmware and blocklist both update 
 cp src/secrets.example.h src/secrets.h
 #    then edit src/secrets.h
 
-# 2. build the blocklist hash table (default = StevenBlack base + Hagezi Light,
-#    ~100k entries, WhatsApp/social safe)
-python3 tools/build_blocklist.py data/blocklist.bin
+# 2. build the blocklist hash table (Hagezi Light + anti-AD + home-dns-adblock,
+#    ~149k entries, CN-curated: video/App/web ads)
+python3 tools/build_blocklist.py data/blocklist.bin --with-hda
 
 # 3. flash firmware + the blocklist filesystem (the one and only USB flash)
 pio run -t upload
@@ -108,32 +108,54 @@ un-blocks that exact entry — it can't carve a subdomain out of a blocked paren
 can't be downloaded the build stops instead of silently producing a smaller list
 (`--allow-missing` to override).
 
-### Chinese app ads (home-dns-adblock rules)
+### Default sources (CN-curated)
 
-`--with-hda` appends [home-dns-adblock](https://github.com/abclq/home-dns-adblock)'s rules —
-CN app ad/tracker domains for Douyin, Fanqie, Hongguo, Xiaohongshu and Amap, extracted from
-real device DNS logs. The rules are pulled **live from that repo's `dist/domains.txt`** on
-every build, so upstream updates land here automatically with nothing to sync:
+The default build targets **CN networks**, with video/App ads as the primary goal:
+
+| Source | What it adds |
+|---|---|
+| [Hagezi Light](https://github.com/hagezi/dns-blocklists) | Broad ads/trackers/malware; strongest general list, covers Kuaishou/Bilibili/iQiyi/Youku |
+| [anti-AD](https://github.com/privacy-protection-tools/anti-AD) | CN web + App ads (`pos.baidu.com`, `cnzz.com`, `tanx.com`, iQiyi/Youku/MangoTV ad hosts) |
+| [home-dns-adblock](https://github.com/abclq/home-dns-adblock) | CN App ads from real device DNS logs (Douyin/Fanqie/Hongguo/Xiaohongshu) |
+
+All three are pulled **live from stable raw URLs** on every build, so upstream rule updates
+land here automatically with nothing to sync:
 
 ```bash
 python3 tools/build_blocklist.py data/blocklist.bin --with-hda
 ```
 
-The weekly GitHub Actions release uses this flag, so the published `blocklist.bin` already
-includes the CN rules.
+Measured output: **~149k entries / ~747 KB**, i.e. ~57 % of the 1.3125 MB LittleFS
+partition. The weekly GitHub Actions release uses this flag, so the published
+`blocklist.bin` already includes all three.
 
-**Playback protection.** Because the firmware blocks a domain *and all of its subdomains*,
-one over-broad parent rule would take the real video down with the ads. The build therefore
-excludes these playback parents: `qznovelvod.com` (Hongguo/Fanqie video), `fqnovelpic.com`
-(image CDN), `douyincdn.com`, `douyinliving.com`, `ecombdimg.com`, `ecombdapi.com`. Ad
-endpoints that live *under* a playback parent are kept — home-dns-adblock marks those with a
-`-reading-ad.` label (`v5-reading-ad.qznovelvod.com`) while the real stream uses
-`-reading-video.`, so the ad hosts stay blocked by their own hash.
+StevenBlack is deliberately **not** included: it is a generic overseas list that on a
+video-app probe matched only 83 domains (mostly overlapping Hagezi) while costing ~268 KB.
+Dropping it buys the headroom anti-AD needs. Add it back yourself if you want its
+malware-domain coverage:
+
+```bash
+python3 tools/build_blocklist.py out.bin \
+  https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts --with-hda
+```
+
+**Protection list.** Because the firmware blocks a domain *and all of its subdomains*, one
+over-broad parent rule can take a real service down with the ads. The build excludes:
+
+- **Playback parents** — `qznovelvod.com` (Hongguo/Fanqie video), `fqnovelpic.com` (image
+  CDN), `douyincdn.com`, `douyinliving.com`, `ecombdimg.com`, `ecombdapi.com`. Ad endpoints
+  *under* a playback parent are kept: home-dns-adblock marks those with a `-reading-ad.`
+  label (`v5-reading-ad.qznovelvod.com`) while the real stream uses `-reading-video.`, so
+  the ad hosts stay blocked by their own hash.
+- **Public DoH resolvers** — `dns.alidns.com`, `doh.pub`. An App's DoH lookup is not itself
+  an ad, but blocking them breaks name resolution for any device/router configured to use
+  them, i.e. it takes the whole LAN offline.
 
 Tune it with `--no-protect` (disable entirely) or `--protect-file F` (replace the list with
-your own, one domain per line). The build fails if the CN source yields fewer than
-`HDA_MIN_DOMAINS` domains, so a moved or renamed upstream file can't silently publish a
-list missing the CN rules.
+your own, one domain per line). The build fails if a CN source yields suspiciously few
+domains (`HDA_MIN_DOMAINS` / `ANTIAD_MIN_DOMAINS`), so a moved or renamed upstream file
+can't silently publish a list missing the CN rules — Hagezi alone (~57k) is enough to mask
+such a loss in the total, so per-source floors are the only reliable catch.
 
 ### WiFi setup (no re-flash needed)
 

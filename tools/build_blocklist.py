@@ -7,9 +7,9 @@ HASH_BYTES MUST match the firmware (src/main.cpp). 5 bytes (40-bit) keeps
 ~0 collisions up to ~500k domains while fitting half a million in <3 MB.
 
 Usage: build_blocklist.py [out.bin] [src ...] [flags]
-  src = local file or URL. With none given, downloads a balanced daily-driver set
-  (StevenBlack base + Hagezi Light) ~= 100k entries: blocks ads/trackers/malware
-  but leaves WhatsApp/Instagram/social/messaging working.
+  src = local file or URL. With none given, downloads the default CN-curated set
+  (Hagezi Light + anti-AD) ~= 150k entries once home-dns-adblock is folded in:
+  ads/trackers across web, App and video surfaces, tuned for CN networks.
 
   For the aggressive "test the limits" build (~500k, also blocks social/messaging):
     build_blocklist.py blocklist.bin \\
@@ -25,9 +25,10 @@ Flags:
   --no-protect        skip playback-protect filtering entirely (not recommended).
   --allow-missing     continue when a source cannot be downloaded (default: fail).
 
-Playback protect (DEFAULT_PROTECT) removes domains that must never be blocked because
-the firmware also blocks every subdomain — a wildcard parent for a CN video app would
-take the real stream down with the ads. See the DEFAULT_PROTECT comment.
+Protect (DEFAULT_PROTECT) removes domains that must never be blocked because the firmware
+also blocks every subdomain: a wildcard parent for a CN video app would take the real
+stream down with the ads, and blocking a public DoH resolver takes the LAN offline. See
+the DEFAULT_PROTECT comment.
 """
 import re
 import sys, os, math, urllib.request
@@ -38,19 +39,33 @@ FNV_OFFSET = 0xcbf29ce484222325
 FNV_PRIME  = 0x100000001b3
 U64 = (1 << 64) - 1
 
-# Daily driver that FITS alongside dual-OTA firmware slots (~250k domain budget):
-# ads + trackers + malware, WhatsApp/social keep working. ~100k entries / 0.5 MB
-# (Hagezi's wildcard lists drop subdomains the firmware's parent-matching already covers).
-# Want more? swap light-onlydomains.txt -> pro-onlydomains.txt is 370k and ONLY fits the
-# single-app (no-OTA) partition table.
+# Daily driver that FITS alongside dual-OTA firmware slots (~250k domain budget).
+#
+# Curated for CN networks with video/app ads as the primary target. StevenBlack was
+# DROPPED: on a video-app probe it contributed 83 matching domains (mostly overlapping
+# Hagezi) while costing ~268 KB of the 1.31 MB filesystem. Removing it buys the headroom
+# anti-AD needs, and anti-AD covers the web/app-ad surface StevenBlack was carrying.
+#
+# Measured on this source set (5-byte hashes, playback-protect applied):
+#   Hagezi Light + home-dns-adblock + anti-AD -> ~149k entries / ~747 KB / 57% of LittleFS
+# Coverage gains vs the old StevenBlack+Hagezi set (video): iQiyi 19->61, Youku 21->88,
+# MangoTV 3->55, Douyin 305->377, Kuaishou 71->101; (web/app) Baidu 99->329, Taobao 63->130.
+HAGEZI_DOMAINS = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt'
+ANTIAD_DOMAINS = 'https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/master/anti-ad-domains.txt'
+
+# anti-AD is the largest CN source (~108k domains) and carries the web/app-ad surface.
+# If it silently truncates, folding in Hagezi still leaves a plausible-looking total, so
+# it gets its own floor alongside home-dns-adblock's.
+ANTIAD_MIN_DOMAINS = 60000
+
 DEFAULT_SOURCES = [
-    'https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts',            # base: ads + malware
-    'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt',  # Hagezi Light (wildcard = domain + subdomains)
+    HAGEZI_DOMAINS,   # Hagezi Light (wildcard = domain + subdomains)
+    ANTIAD_DOMAINS,   # anti-AD: CN ads/trackers (web + app)
 ]
 
-# Sources appended by --with-hda (and by the weekly CI release), on top of any
-# explicit src arguments. Keep these as *stable raw URLs* so a rebuilt blob picks
-# up upstream changes with no edit here.
+# Appended by --with-hda AND always included by the weekly CI release (see DEFAULT_SOURCES
+# users). Keep these as *stable raw URLs* so a rebuilt blob picks up upstream changes with
+# no edit here.
 #
 # home-dns-adblock maintains CN-app ad/tracker domains (Douyin/Fanqie/Hongguo/
 # Xiaohongshu/Amap) extracted from real device DNS logs. Its own generator writes
@@ -67,9 +82,9 @@ HDA_SOURCES = [HDA_DOMAINS]
 HDA_MIN_DOMAINS = 120
 
 # Explicit allowlist, applied AFTER every source and after the @@/-minus filters.
-# This is the last line of defence for playback: the firmware blocks a domain and
-# all of its subdomains, so one over-broad parent rule in ANY upstream list would
-# take the real video down with the ads. Matches exact domains and subdomains.
+# This is the last line of defence: the firmware blocks a domain and all of its
+# subdomains, so one over-broad parent rule in ANY upstream list would take the real
+# service down with the ads. Matches exact domains and subdomains.
 # Override/disable with --protect-file (see DEFAULT_PROTECT).
 DEFAULT_PROTECT = [
     'qznovelvod.com',      # Hongguo / Fanqie real video (*-reading-video)
@@ -78,6 +93,11 @@ DEFAULT_PROTECT = [
     'douyinliving.com',    # Douyin live streams
     'ecombdimg.com',       # E-commerce images (order pages)
     'ecombdapi.com',       # E-commerce API
+    # Public DNS resolvers: an App's DoH traffic is not itself an ad, but blocking these
+    # breaks name resolution for any device/browser/router configured to use them -- i.e.
+    # it takes the whole LAN offline. home-dns-adblock ships both; keep them unblocked.
+    'dns.alidns.com',      # AliDNS DoH endpoint
+    'doh.pub',             # Tencent DoH endpoint (also dot.pub over HTTPS)
 ]
 
 # ||domain^  or  @@||domain^  optionally followed by $modifiers
@@ -138,10 +158,17 @@ def strip_protected(domains: set, protect) -> list:
 
 def check_required_source(src: str, found: int) -> bool:
     """True if a source yielded enough to be publishable. A list that downloads but
-    parses to almost nothing (moved file, HTML error page) is the silent-shrink mode."""
-    if HDA_DOMAINS not in src:
-        return True
-    return found >= HDA_MIN_DOMAINS
+    parses to almost nothing (moved file, HTML error page) is the silent-shrink mode.
+
+    Only the CN sources are floored. Hagezi legitimately grows/shrinks between releases,
+    but anti-AD and home-dns-adblock are the whole point of this build -- if either
+    silently truncates, the published list quietly loses its CN coverage while the total
+    size still looks plausible (Hagezi alone is 57k), so a floor is the only catch.
+    """
+    for required, floor in ((HDA_DOMAINS, HDA_MIN_DOMAINS), (ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS)):
+        if required in src:
+            return found >= floor
+    return True
 
 def main():
     global ALLOW_MISSING

@@ -9,7 +9,8 @@ import sys
 import tempfile
 import unittest
 
-from build_blocklist import (HASH_BYTES, HDA_DOMAINS, HDA_MIN_DOMAINS, check_required_source,
+from build_blocklist import (ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS, DEFAULT_PROTECT, HAGEZI_DOMAINS,
+                             HASH_BYTES, HDA_DOMAINS, HDA_MIN_DOMAINS, check_required_source,
                              fnv, is_ad_endpoint, is_protected, strip_protected)
 
 SCRIPT = pathlib.Path(__file__).with_name('build_blocklist.py')
@@ -170,16 +171,31 @@ class BuildBlocklistTests(unittest.TestCase):
 class GuardTests(unittest.TestCase):
     """The pure helpers behind the CI guards, tested without any network I/O."""
 
-    def test_shrunk_hda_source_is_rejected(self):
+    def test_shrunk_cn_sources_are_rejected(self):
+        """A CN source that parses to almost nothing must fail the build: Hagezi alone
+        still yields ~57k, so a truncated anti-AD/HDA would look plausible in the total."""
         self.assertTrue(HDA_DOMAINS.startswith('https://'),
                         'the HDA source must stay a stable URL, not a vendored copy')
-        self.assertFalse(check_required_source(HDA_DOMAINS, HDA_MIN_DOMAINS - 1),
-                         'a list that parses to almost nothing must fail the build')
-        self.assertTrue(check_required_source(HDA_DOMAINS, HDA_MIN_DOMAINS))
+        self.assertTrue(ANTIAD_DOMAINS.startswith('https://'),
+                        'the anti-AD source must stay a stable URL, not a vendored copy')
+        for src, floor in ((HDA_DOMAINS, HDA_MIN_DOMAINS), (ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS)):
+            self.assertFalse(check_required_source(src, floor - 1), f'{src} floor not enforced')
+            self.assertTrue(check_required_source(src, floor))
 
-    def test_unrelated_source_is_not_held_to_the_hda_floor(self):
-        """StevenBlack/Hagezi legitimately shrink or grow; only HDA is guarded."""
+    def test_hagezi_is_not_held_to_a_floor(self):
+        """Hagezi legitimately shrinks between releases; only the CN sources are floored.
+        check_required_source means 'publishable', so an unfloored source always passes."""
+        self.assertTrue(check_required_source(HAGEZI_DOMAINS, 0))
+        self.assertTrue(check_required_source(HAGEZI_DOMAINS, 999_999))
+
+    def test_unrelated_source_is_not_held_to_a_floor(self):
         self.assertTrue(check_required_source('https://example.com/hosts', 0))
+
+    def test_public_doh_resolvers_are_protected(self):
+        """Blocking a DoH resolver takes the LAN offline -- an App's DoH lookup is not an ad."""
+        for resolver in ('doh.pub', 'dns.alidns.com'):
+            self.assertTrue(is_protected(resolver, DEFAULT_PROTECT),
+                            f'{resolver} must never be blocked (whole LAN loses DNS)')
 
     def test_protect_matches_exact_and_subdomains_only(self):
         protect = ['qznovelvod.com']
@@ -191,7 +207,6 @@ class GuardTests(unittest.TestCase):
         self.assertFalse(is_protected('other.com', protect))
 
     def test_default_protect_covers_cn_playback_parents(self):
-        from build_blocklist import DEFAULT_PROTECT
         for parent in ('qznovelvod.com', 'fqnovelpic.com', 'douyincdn.com', 'douyinliving.com'):
             self.assertIn(parent, DEFAULT_PROTECT)
 
