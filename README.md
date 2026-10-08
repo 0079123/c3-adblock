@@ -127,7 +127,7 @@ python3 tools/build_blocklist.py data/blocklist.bin --with-hda
 ```
 
 Measured output: **~136k entries / ~682 KB**, i.e. ~50 % of the LittleFS partition
-(`0x150000` = 1,376,256 B, so ~139k entries of headroom remain). The weekly GitHub Actions
+(`0x150000` = 1,376,256 B, so ~139k entries of headroom remain). The daily GitHub Actions
 release uses this flag, so the published `blocklist.bin` already includes all four.
 
 Use 217heidai's **`adblockdomainlite.txt`**, not the repo's headline
@@ -196,7 +196,7 @@ The dashboard at **http://c3adblock.local** does it all:
 
 - **Blocklist** — drop a freshly built `blocklist.bin` into *Blocklist → Upload*, or set a
   URL under *Remote auto-update* and the device pulls a prebuilt `blocklist.bin`
-  on a schedule. A fresh default list is rebuilt **every Monday** by GitHub Actions and
+  on a schedule. A fresh default list is rebuilt **daily at 03:00 Beijing time** by GitHub Actions and
   published at a stable URL, so pasting this once keeps a device current on its own:
   `https://github.com/0079123/c3-adblock/releases/download/blocklist/blocklist.bin`
 - **Firmware** — upload `.pio/build/c3/firmware.bin` under *Firmware → OTA update*; the
