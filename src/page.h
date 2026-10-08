@@ -157,13 +157,19 @@ function credHeaders(){
   var raw=sessionStorage.getItem('c3cred')||localStorage.getItem('c3cred')||'';
   return raw?Object.assign({},CSRF_HDRS,{Authorization:'Basic '+raw}):CSRF_HDRS;
 }
-function needCreds(){
-  if(!credHeaders().Authorization){showLogin();return true;}
-  return false;
-}
+// Returns true only when a complete user/password pair was entered. Cancelling either box
+// stops immediately -- the old version always opened the password prompt even after the
+// user cancelled the name, which read as the page ignoring the cancel.
 function showLogin(){
-  var u=prompt(t('loginUser')||'用户名 / user'), pw=prompt(t('loginPass')||'密码 / password');
-  if(u&&pw)setCreds(u,pw);
+  var u=prompt(t('loginUser'));
+  if(u===null||!u.trim())return false;
+  var pw=prompt(t('loginPass'));
+  if(pw===null||!pw.length)return false;
+  setCreds(u.trim(),pw);
+  return true;
+}
+function clearCreds(){
+  try{localStorage.removeItem('c3cred');sessionStorage.removeItem('c3cred');}catch(e){}
 }
 function setCreds(u,pw){
   try{
@@ -172,37 +178,33 @@ function setCreds(u,pw){
     var b=document.getElementById('credbar');if(b)b.style.display='none';
   }catch(e){}
 }
-function api(url,opts){
-  // If credentials are missing, ask once and then retry the same request. Previously the
-  // first click was swallowed: showLogin() collected them but api() rejected anyway, so the
-  // user had to click a second time for no visible reason.
-  // Credentials are only demanded when an action is actually clicked -- the page itself
-  // loads without any login, and the bar stays hidden until then.
+function api(url,opts,retried){
+  // Credentials are only demanded when an action is clicked; the page itself loads
+  // without any login prompt.
   var cb=document.getElementById('credbar');
   if(!credHeaders().Authorization){
-    if(cb)cb.style.display='block';          // 说明为什么要密码
-    showLogin();
-    if(credHeaders().Authorization&&cb)cb.style.display='none';   // 登录成功即隐藏
-    if(!credHeaders().Authorization)return Promise.reject(new Error('login cancelled'));
+    if(cb)cb.style.display='block';
+    if(!showLogin())return Promise.reject(new Error('login cancelled'));
+    if(cb)cb.style.display='none';
   } else if(cb) cb.style.display='none';
   return fetch(url,Object.assign({headers:credHeaders()},opts||{})).then(function(r){
-    // 401 = wrong or missing credentials, not a generic failure. Ask again and retry once
-    // so a mistyped password is recoverable without reloading the page.
     if(r.status===401){
-      showLogin();
-      if(credHeaders().Authorization)return api(url,opts);
-      alert(t('needAuth'));throw new Error('auth');
+      // Stored credentials were rejected. They MUST be dropped before re-prompting:
+      // keeping them made `if (Authorization) retry` true again after a cancel, so the
+      // 401 -> prompt -> cancel -> 401 cycle never terminated.
+      clearCreds();
+      if(cb)cb.style.display='block';
+      if(retried||!showLogin()){alert(t('needAuth'));throw new Error('auth');}
+      if(cb)cb.style.display='none';
+      return api(url,opts,true);            // at most one retry per click
     }
     if(!r.ok){throw new Error('http '+r.status);}
     return r;
   }).catch(function(e){
-    if(String(e.message)==='auth'){alert(t('needAuth'));}
-    else if(String(e.message)!=='login cancelled'){banner(t('actFailed')+': '+e.message);}
+    if(String(e.message)!=='auth'&&String(e.message)!=='login cancelled')
+      banner(t('actFailed')+': '+e.message);
     throw e;
   });
-}
-function needCreds(){
-  return !credHeaders().Authorization;
 }
 function banner(msg){
   var b=document.getElementById('errbar');

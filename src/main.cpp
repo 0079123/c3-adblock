@@ -203,28 +203,31 @@ static const char* const MULTI_TLD[] = {
   "com.cn","net.cn","org.cn","gov.cn","edu.cn","ac.cn","co.uk","org.uk","ac.uk",
   "com.br","co.jp","or.kr","co.kr","com.au","net.au","co.in","com.tw","com.hk",NULL };
 
-// Returns the start offset of the registrable domain within d (last two labels, or three
-// when the tail is a known multi-part suffix).
+// Start offset of the label `back` positions from the right (0 = last label, 1 = the one
+// before it, ...). Returns 0 when the name has no more labels to skip.
+static int capLabelStart(const char* d, int back) {
+  int n = strlen(d), seen = 0;
+  for (int i = n; i >= 0; i--)
+    if (i == 0 || d[i - 1] == '.') { if (seen == back) return i; seen++; }
+  return 0;
+}
+static int capLabelCount(const char* d) {
+  int c = 1; for (const char* p = d; *p; p++) if (*p == '.') c++; return c;
+}
+
+// Offset of the registrable domain within d: last two labels, or three when the tail is a
+// known multi-part public suffix.
 static int capRootOffset(const char* d) {
-  int n = strlen(d);
-  int dots = 0, last = n, prev = n;
-  for (int i = n; i >= 0; i--) {
-    if (i == 0 || d[i - 1] == '.') {
-      dots++;
-      if (dots == 1) last = i;
-      else if (dots == 2) { prev = i; break; }
-    }
-  }
-  if (dots < 2) return 0;
+  if (capLabelCount(d) < 2) return 0;
+  int n = strlen(d), prev = capLabelStart(d, 1);
+  // Match the TWO-LABEL tail (d+prev, e.g. "com.cn"). Matching only the last label ("cn")
+  // can never hit a multi-char entry, so every *.com.cn tenant merged into one "com.cn"
+  // row -- seen in real capture data as 31 hits for "com.cn" with example
+  // sdktmp.hubcloud.com.cn, where the group should be hubcloud.com.cn.
   for (int k = 0; MULTI_TLD[k]; k++) {
     int len = strlen(MULTI_TLD[k]);
-    if (n - last == len && strcmp(d + last, MULTI_TLD[k]) == 0) {
-      // tail is e.g. "com.cn": include one more label
-      int dots2 = 0, prev2 = prev;
-      for (int i = prev; i >= 0; i--)
-        if (i == 0 || d[i - 1] == '.') { if (++dots2 == 2) { prev2 = i; break; } }
-      return prev2;
-    }
+    if (n - prev == len && strcmp(d + prev, MULTI_TLD[k]) == 0)
+      return capLabelCount(d) >= 3 ? capLabelStart(d, 2) : prev;
   }
   return prev;
 }
