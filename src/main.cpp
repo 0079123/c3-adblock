@@ -373,15 +373,32 @@ static inline void packHash(uint64_t h, uint8_t* b) {
 
 static void buildFlashIndex() {
   if (!blocklist || numHashes == 0) return;
+  int shortReads = 0;
   for (int i = 0; i < INDEX_ENTRIES; i++) {
     uint32_t pos = (uint32_t)((uint64_t)i * (numHashes - 1) / (INDEX_ENTRIES - 1));
-    blocklist.seek((uint32_t)pos * HASH_BYTES);
-    blocklist.read(blIndex[i], HASH_BYTES);
+    if (!blocklist.seek((uint32_t)pos * HASH_BYTES) ||
+        blocklist.read(blIndex[i], HASH_BYTES) != HASH_BYTES) {
+      // A half-written index entry makes every lookup in that bucket miss, and the entry
+      // stays wrong for the life of the list. Retry once, then count it so the dashboard
+      // is not silently under-blocking.
+      memset(blIndex[i], 0, HASH_BYTES);
+      if (!blocklist.seek((uint32_t)pos * HASH_BYTES) ||
+          blocklist.read(blIndex[i], HASH_BYTES) != HASH_BYTES) shortReads++;
+    }
   }
+  if (shortReads) Serial.printf("[blocklist] WARNING: %d index entries unreadable\n", shortReads);
   for (int i = 0; i < CACHE_SIZE; i++) cacheValid[i] = 0;
 }
 
-static bool inFlash(uint64_t h) {
+// `reliable` is set false when the lookup could not be completed (file handle gone, short
+// read). A failed read otherwise looks exactly like "not on the list", and isBlockedHash
+// used to cache that negative permanently: one transient short read while LittleFS was
+// busy writing a fresh blocklist silently un-blocked that domain until the next list
+// reload. Cold boot blocked correctly, long-running sessions leaked -- which is what the
+// field data showed.
+static bool inFlash(uint64_t h, bool* reliable = nullptr) {
+  auto bad = [&]{ if (reliable) *reliable = false; };
+  if (reliable) *reliable = true;
   if (numHashes == 0) return false;
   uint64_t first = unpackHash(blIndex[0]);
   uint64_t last  = unpackHash(blIndex[INDEX_ENTRIES - 1]);
@@ -407,9 +424,10 @@ static bool inFlash(uint64_t h) {
   uint32_t rangeCount = endPos - startPos + 1;
   if (rangeCount > (uint32_t)MAX_RANGE) rangeCount = MAX_RANGE;
 
-  blocklist.seek((uint32_t)startPos * HASH_BYTES);
-  blocklist.read(rangeBuf, (uint32_t)rangeCount * HASH_BYTES);
-
+  if (!blocklist.seek((uint32_t)startPos * HASH_BYTES)) { bad(); return false; }
+  if (blocklist.read(rangeBuf, (uint32_t)rangeCount * HASH_BYTES) != (int)(rangeCount * HASH_BYTES)) {
+    bad(); return false;                 // short read: unknown, must not be cached as "allowed"
+  }
   for (uint32_t i = 0; i < rangeCount; i++) {
     uint64_t v = unpackHash(rangeBuf + i * HASH_BYTES);
     if (v == h) return true;
@@ -432,7 +450,9 @@ static bool isBlockedHash(uint64_t h) {
     for (int k = 0; k < HASH_BYTES; k++) if (cacheKey[slot][k] != want[k]) { same = false; break; }
     if (same) return cacheRes[slot] != 0;
   }
-  bool res = inFlash(h);
+  bool reliable = true;
+  bool res = inFlash(h, &reliable);
+  if (!reliable) return res;            // never poison the cache with an unknown result
   cacheValid[slot] = 1;
   cacheRes[slot] = res ? 1 : 0;
   packHash(h, cacheKey[slot]);
