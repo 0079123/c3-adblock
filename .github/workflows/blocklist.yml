@@ -56,6 +56,9 @@ jobs:
           # --no-prune should be loud rather than just a bigger file.
           grep -q 'parent-redundant' build.log || { echo "pruning did not run"; exit 1; }
           echo "all sources present, pruning active"
+      - name: Dump build log tail on failure
+        if: failure()
+        run: tail -60 build.log >> "$GITHUB_STEP_SUMMARY" || true
       - name: Publish to the 'blocklist' release
         env:
           GH_TOKEN: ${{ github.token }}
