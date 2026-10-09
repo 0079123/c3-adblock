@@ -122,3 +122,14 @@ jobs:
             gh release create "$TAG" --title "Firmware" --notes "$notes"
           fi
           gh release upload "$TAG" out/*.bin --clobber
+
+          # Drop assets that are no longer part of the set. A renamed asset otherwise lingers
+          # forever and the release reads as if it ships two different app images, which is
+          # exactly the confusion that prompted consolidating these workflows.
+          keep=" $(cd out && ls *.bin | tr '\n' ' ') "
+          gh release view "$TAG" --json assets --jq '.assets[].name' | while read -r name; do
+            case "$keep" in
+              *" $name "*) ;;
+              *) echo "removing stale asset: $name"; gh release delete-asset "$TAG" "$name" --yes ;;
+            esac
+          done
