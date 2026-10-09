@@ -163,3 +163,18 @@ hangzhoumengfa.com
 # aishuttler.com
 # digitalcloudshield.com：monitor-pro.*，风控/监控类命名，拦了可能影响 App 风控
 # digitalcloudshield.com
+
+# ---- 2026-10-09 抓包 round 7（c3-dns-capture-7.csv，拦截层健康状态下的观看会话）----
+# 腾讯系（含腾讯视频）广告素材分发域，ins-* 实例承载广告图片/素材；每轮抓包
+# 24-46 次全部放行，AdGuard/AdAway 社区规则普遍屏蔽它
+ias.tencent-cloud.net
+# The Trade Desk 中国广告服务器
+adsrvr.cn
+# 饿了么 CDN 上的广告素材主机
+admedia.elemecdn.com
+# RTB 竞价端点
+rtb.tangelo.com.cn
+
+# ---- 继续挂起 ----
+# deepzero.com：vt.*，身份未查证
+# deepzero.com
