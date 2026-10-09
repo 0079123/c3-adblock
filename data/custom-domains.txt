@@ -65,3 +65,23 @@ afp.qiyi.com
 #   alibabadns.com aliyuncsslb.com bytedns3.com ksyuncdn.com shifen.com 71edge.com
 #   queniusz.com queniuak.com queniuuf.com queniubl.com ydycdn.com dnse2.com dnsv1.com
 #   123clouddrive.net 1rtb.net(部分) hitv.com(IPTV业务) gitv.tv(业务) soku.com(优酷搜索)
+
+# ---- 2026-10-09 抓包分析（c3-dns-capture-2.csv，客户端 192.168.0.105）----
+# 本轮核验结论：视频贴片与摇一摇广告的 SDK 主域（穿山甲 pangolin-sdk-toutiao*、
+# 优量汇 ugdtimg/pgdt、蜂巢 beizi、Fancy fancyapi/fancydsp、秒针 miaozhen、灵集
+# lingjuad、1rtb、aiclk、adn-plus、qttunion、innoads、voiceads、9zas5、adwangmai、
+# sigmob/mintegral/toponad/adview（上游已收））在现有规则下已全部拦截，无需重复添加。
+
+# 事件埋点收集（event-server.*）。同品牌 funsdata.com 已被 Hagezi 收录；
+# 抓包 2 次全部放行，确认为追踪域。
+funsdata.com.cn
+
+# ---- 以下在抓包中出现且全部放行，但身份未证实，确认后取消注释 ----
+# iphone_pv_log.* 行为上报，运营方未查明（anti-AD/Hagezi/adblockfilters/ad-wars 均无记录）
+# kltb.com.cn
+# datain.* 埋点图钉，疑似 6711 游戏平台追踪
+# 6711img.com
+# origin-api.* 主机返回默认占位页（"站点创建成功"），查询时间与广告 SDK 突发窗口重合，功能不明
+# vryfh.top
+# 腾讯云 ias.*：抓包 22 放行 1 拦截，身份未证实；属腾讯云基础设施，宁缺勿滥
+# ias.tencent-cloud.net
