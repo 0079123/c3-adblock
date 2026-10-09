@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 from build_blocklist import (ADBLOCKFILTERS_DOMAINS, ANTIAD_DOMAINS, ANTIAD_MIN_DOMAINS,
-                             CUSTOM_DOMAINS, DEFAULT_PROTECT, DEFAULT_SOURCES, FLUX_DOMAINS, HAGEZI_DOMAINS,
+                             ADWARS_HOSTS, CUSTOM_DOMAINS, DEFAULT_PROTECT, DEFAULT_SOURCES, FLUX_DOMAINS, HAGEZI_DOMAINS,
                              HASH_BYTES, HDA_DOMAINS, HDA_MIN_DOMAINS, check_required_source,
                              fnv, is_ad_endpoint, is_protected, prune_parent_redundant,
                              strip_protected)
@@ -324,6 +324,17 @@ class GuardTests(unittest.TestCase):
                            check=True, capture_output=True, text=True)
             got = hashes_of(out)
             self.assertIn(fnv(b'tad.qq.com'), got, 'custom entry missing from blob')
+
+    def test_adwars_nonal_entries_are_protected(self):
+        """ad-wars is mostly covered already and its net additions include login/push/
+        static-asset domains. Those must stay in DEFAULT_PROTECT, otherwise adding the
+        source breaks Aliyun one-tap login and app CDNs -- the exact breakage the flux
+        list's own @@ allow rules exist to prevent."""
+        self.assertIn(ADWARS_HOSTS, DEFAULT_SOURCES)
+        for d in ('ynuf.aliapp.org', 'jnn-pa.googleapis.com', 'resolver.msg.xiaomi.net',
+                  'ckjr001.com', 'meipian7.cn', 'nmobi.kuwo.cn', 'du.163.com',
+                  'hw.zuimeitianqi.com', 'cloudservice22.kingsoft-office-service.com'):
+            self.assertTrue(is_protected(d, DEFAULT_PROTECT), f'{d} must not be blocked')
 
     def test_flux_list_is_tracked_and_in_the_build(self):
         """data/flux-blocklist-adguard.txt is the user's capture-verified list; it must be

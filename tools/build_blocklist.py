@@ -61,6 +61,13 @@ ANTIAD_DOMAINS = 'https://raw.githubusercontent.com/privacy-protection-tools/ant
 # ~520 of its 106k lines are usable here). The lite domain list adds ~1.2k entries after
 # dedup, incl. Youku/iQiyi/MangoTV ad hosts and dns.weixin.qq.com (see DEFAULT_PROTECT).
 ADBLOCKFILTERS_DOMAINS = 'https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblockdomainlite.txt'
+# jdlingyu/ad-wars: CN-focused hosts list. Against the current published blob it adds only
+# 16 domains (1,622 of its 1,638 are already covered), but 6 of those are genuinely missing
+# -- notably tanx.com, the Alimama ad exchange that none of the other sources carried. Kept
+# as a live source so future additions flow in automatically; the entries that break
+# login/push/app resources are neutralised in DEFAULT_PROTECT rather than by dropping the
+# source, so the annotations there explain each exception.
+ADWARS_HOSTS = 'https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts'
 
 # Maintainer's own list, kept in-repo (not gitignored) so CI and every local build pick it
 # up. Resolved relative to this script so the build works from any cwd. Add domains here
@@ -83,6 +90,7 @@ DEFAULT_SOURCES = [
     HAGEZI_DOMAINS,             # Hagezi Light (wildcard = domain + subdomains)
     ANTIAD_DOMAINS,             # anti-AD: CN ads/trackers (web + app)
     ADBLOCKFILTERS_DOMAINS,     # 217heidai lite domain list: Youku/iQiyi/MangoTV ad hosts
+    ADWARS_HOSTS,               # jdlingyu/ad-wars: CN app ads (see DEFAULT_PROTECT for its exceptions)
     CUSTOM_DOMAINS,             # data/custom-domains.txt: hand-picked additions
     FLUX_DOMAINS,               # data/flux-blocklist-adguard.txt: capture-verified list
 ]
@@ -129,6 +137,19 @@ DEFAULT_PROTECT = [
     'dns.weixin.qq.com',
     'aedns.weixin.qq.com',
     'dns.weixin.qq.com.cn',
+    # ---- ad-wars entries that are NOT ads despite being on that list ----
+    # The flux list deliberately @@-allows carrier one-tap-login SDKs (id6.me,
+    # auth.wosms.cn, enrichgw.10010.com); ad-wars blocks the Aliyun equivalent, which would
+    # reintroduce exactly the breakage those @@ lines exist to prevent.
+    'ynuf.aliapp.org',           # Aliyun Yunma phone-number auth (one-tap login)
+    'jnn-pa.googleapis.com',     # Google Play services (location/sync, not just ads)
+    'resolver.msg.xiaomi.net',   # Xiaomi push / resolver
+    'cloudservice22.kingsoft-office-service.com',  # Kingsoft Docs cloud
+    'ckjr001.com',               # Caiyun Weather: assets.* / kpstaticbj.wx.* are app resources
+    'meipian7.cn',               # Meipian app content
+    'nmobi.kuwo.cn',             # Kuwo Music service
+    'du.163.com',                # NetEase service
+    'hw.zuimeitianqi.com',       # Zuimei Weather service
 ]
 
 # ||domain^  or  @@||domain^  optionally followed by $modifiers
