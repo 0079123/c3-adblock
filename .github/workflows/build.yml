@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   firmware:
     runs-on: ubuntu-latest
@@ -25,6 +28,57 @@ jobs:
       - name: Placeholder secrets (real ones are gitignored; the firmware falls back to the setup portal)
         run: cp src/secrets.example.h src/secrets.h
       - run: pio run -e ${{ matrix.env }}
+      # PR builds just check compilation; pushes to main also feed the publish job.
+      - name: Stage the app image under its release name
+        if: github.event_name == 'push'
+        run: cp .pio/build/${{ matrix.env }}/firmware.bin firmware-${{ matrix.env }}.bin
+      - name: Save the app image for the release job
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: firmware-${{ matrix.env }}.bin
+
+  publish:
+    # Rebuilds the rolling 'firmware' release on every push to main, so firmware
+    # OTA always has stable download URLs, mirroring the 'blocklist' release:
+    #   https://github.com/0079123/c3-adblock/releases/download/firmware/firmware-c3.bin
+    # Built with placeholder secrets, so a fresh flash boots into the setup portal
+    # and the owner sets real credentials there (see README: Build & flash).
+    needs: firmware
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          merge-multiple: true
+          path: out
+      - name: Publish to the 'firmware' release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l out
+          test -s out/firmware-c3.bin
+          test -s out/firmware-esp32dev.bin
+          short=${GITHUB_SHA::7}
+          notes="Auto-built $(date -u +%F) from commit ${short}: ESP32-C3 and ESP32 classic OTA app images.
+
+          firmware-c3.bin is for the C3 SuperMini this project targets; firmware-esp32dev.bin
+          is the classic ESP32 build. Upload either under *Firmware → OTA update* in the
+          device's dashboard, or push over WiFi with pio run -t upload --upload-protocol espota.
+
+          Built with placeholder credentials, so a fresh flash starts the setup portal --
+          set real WEB_USER / WEB_PASS / OTA_PASS there (README: Build & flash).
+
+          Direct download:
+          https://github.com/${{ github.repository }}/releases/download/firmware/firmware-c3.bin"
+          if gh release view firmware >/dev/null 2>&1; then
+            gh release edit firmware --notes "$notes"
+          else
+            gh release create firmware --title "Firmware" --notes "$notes" --latest=false
+          fi
+          gh release upload firmware out/firmware-c3.bin out/firmware-esp32dev.bin --clobber
 
   blocklist-tool:
     runs-on: ubuntu-latest

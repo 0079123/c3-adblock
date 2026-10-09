@@ -199,8 +199,11 @@ The dashboard at **http://c3adblock.local** does it all:
   on a schedule. A fresh default list is rebuilt **daily at 03:00 Beijing time** by GitHub Actions and
   published at a stable URL, so pasting this once keeps a device current on its own:
   `https://github.com/0079123/c3-adblock/releases/download/blocklist/blocklist.bin`
-- **Firmware** — upload `.pio/build/c3/firmware.bin` under *Firmware → OTA update*; the
-  device verifies it and reboots into the new image. Or push over WiFi from the CLI:
+- **Firmware** — GitHub Actions builds the app image on every push to `main` and publishes
+  it at a stable URL (download it, then upload under *Firmware → OTA update*; the device
+  verifies it and reboots into the new image):
+  `https://github.com/0079123/c3-adblock/releases/download/firmware/firmware-c3.bin`
+  Or build locally and push over WiFi from the CLI:
   ```bash
   pio run -t upload --upload-port c3adblock.local --upload-protocol espota
   ```
