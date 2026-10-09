@@ -134,7 +134,7 @@ function applyLang(l){lang=l;try{localStorage.setItem('c3lang',l)}catch(e){}
  remoteHint.textContent=t('remoteHint');lblLast.textContent=t('lblLast');
  hFw.textContent=t('hFw');btnFw.textContent=t('btnFw');fwHint.textContent=t('fwHint');
  hWifi.textContent=t('hWifi');btnForget.textContent=t('btnForget');
- hCap.textContent=t('hCap');btnCapApply.textContent=t('btnCapApply');btnCapClear.textContent=t('btnCapClear');
+ hCap.textContent=t('hCap');btnCapToggle.textContent=capIsOn?t('btnCapStop'):t('btnCapStart');btnCapApply.textContent=t('btnCapApply');btnCapClear.textContent=t('btnCapClear');
  btnCapCsv.textContent=t('btnCapCsv');capHint.textContent=t('capHint');
  thCapDomain.textContent=t('thCapDomain');thCapHits.textContent=t('thCapHits');thCapResult.textContent=t('thCapResult');thCapClient.textContent=t('thCapClient');
  credwarnT.textContent=t('credWarnTitle');credwarnB.textContent=t('credWarnBody');
@@ -262,7 +262,9 @@ function capRender(j){
       (e.bh?('拦'+fmt(e.bh)+(e.ah?' / 放'+fmt(e.ah):'')):('放'+fmt(e.ah||e.hits)))+'</td><td style="color:#8b949e">'+esc(e.ip)+'</td></tr>';
   }).join('') : ('<tr><td colspan=4 style=color:#8b949e>'+t('capEmpty')+'</td></tr>');
 }
-function capLoad(){fetch('/capture.json').then(function(r){return r.json()}).then(capRender).catch(function(){})}
+// capRender paints btnCapToggle's label, so a failed first load must retry: the tick
+// below only runs once capIsOn is set, and only a successful render sets it.
+function capLoad(){fetch('/capture.json').then(function(r){return r.json()}).then(capRender).catch(function(){setTimeout(capLoad,3000)})}
 // A reboot empties the capture table; naming the cause turns "it stopped on its own"
 // into an explainable event. Only shown when the reset was not a normal power-on.
 function capBoot(r){
