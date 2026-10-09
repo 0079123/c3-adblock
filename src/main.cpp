@@ -737,9 +737,20 @@ static void handleBan() {
 // then commit. An aborted transfer therefore leaves the existing list untouched --
 // fail-safe (keep blocking with the old list) instead of fail-open (block nothing).
 static void reopenBlocklist() {
-  blocklist = LittleFS.open(BLOCKLIST_PATH, "r");
-  numHashes = blocklist ? blocklist.size() / HASH_BYTES : 0;
-  buildFlashIndex();
+  // LittleFS can still be flushing a freshly swapped blob, and buildFlashIndex then
+  // zeroes unreadable samples -- a zeroed LAST entry makes `h > last` short-circuit
+  // every lookup, silently disabling the whole list while the dashboard keeps showing
+  // the domain count (observed in the field). Rebuild until the index is sane: the
+  // blob is sorted, so first <= last must hold for any usable index.
+  for (int attempt = 0; attempt < 5; attempt++) {
+    blocklist = LittleFS.open(BLOCKLIST_PATH, "r");
+    numHashes = blocklist ? blocklist.size() / HASH_BYTES : 0;
+    buildFlashIndex();
+    if (numHashes == 0) return;
+    if (unpackHash(blIndex[0]) <= unpackHash(blIndex[INDEX_ENTRIES - 1])) return;
+    if (attempt < 4) delay(200);
+  }
+  Serial.println("[blocklist] FATAL: flash index unusable after retries -- refetch or reboot");
 }
 static void discardPendingBlocklist() {             // aborted transfer -> drop the partial
   if (blocklist) blocklist.close();
