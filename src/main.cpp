@@ -62,6 +62,14 @@ static size_t expectedBlocklistBytes = 0;
 // cache layer and still look monotonic, so loop() reopens once more after 3 s.
 static uint32_t indexRebuildDue = 0;
 
+// Canary for runtime index health: the LAST index sample is by construction always in
+// the blob, so inFlash() over it must succeed forever. Field data shows this board can
+// start failing lookups minutes after boot while the file stays byte-perfect on flash
+// (reads through the lookup path go bad) -- the probe exposes that, and loop() rebuilds
+// instead of quietly forwarding every ad.
+static uint64_t indexCanary = 0;
+static uint32_t canaryNextAt = 0;
+
 // ---- globals ----
 WiFiUDP dnsServer, upstreamCli;
 WebServer web(80);
@@ -763,6 +771,8 @@ static void reopenBlocklist(bool afterSwap = false) {
       // swap the whole table can still forward until the file settles. One delayed
       // rebuild settles it; loop() runs it and re-clears the hash cache.
       if (afterSwap) indexRebuildDue = millis() + 3000;
+      indexCanary = unpackHash(blIndex[INDEX_ENTRIES - 1]);
+      canaryNextAt = millis() + 30000;
       return;
     }
     if (attempt < 4) delay(200);
@@ -1340,6 +1350,18 @@ void loop() {
   if (indexRebuildDue && (int32_t)(millis() - indexRebuildDue) >= 0) {
     indexRebuildDue = 0;
     reopenBlocklist();          // second pass once the swap's flush has settled
+  }
+  if (indexCanary && (int32_t)(millis() - canaryNextAt) >= 0) {
+    canaryNextAt = millis() + 30000;
+    bool reliable = true;
+    // The canary hash is in the list by construction, so a confident miss means every
+    // lookup is failing right now (field-verified failure mode: ad domains silently
+    // forward for whole sessions). Rebuild immediately instead of waiting for someone
+    // to notice; unreliable reads are ignored, matching inFlash's own rule.
+    if (!inFlash(indexCanary, &reliable) && reliable) {
+      Serial.println("[blocklist] canary lookup failed -- index compromised, rebuilding");
+      reopenBlocklist(true);
+    }
   }
   if (!blockingOn && resumeAt && (int32_t)(millis() - resumeAt) >= 0) { blockingOn = true; resumeAt = 0; }
   if (updateUrl.length()) {               // periodic remote blocklist auto-update
