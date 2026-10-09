@@ -18,6 +18,11 @@ src/secrets.h
 # Backups / scratch
 *.bak
 
+# AI agent session state. These appear in the working tree while an agent runs and are not
+# part of the project; one of them (a plugin_root pointer) holds an absolute local path.
+.mimosa/
+.v2c/
+
 # Python bytecode
 __pycache__/
 *.pyc
