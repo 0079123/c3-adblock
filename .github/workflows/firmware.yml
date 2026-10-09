@@ -68,13 +68,18 @@ jobs:
           cp "$B/firmware.bin"    out/
           cp "$B/bootloader.bin"  out/
           cp "$B/partitions.bin"  out/
-          cp "$B/boot_app0.bin"   out/
           cp "$B/littlefs.bin"    out/
+          # PlatformIO does not emit boot_app0.bin; it ships inside the Arduino framework
+          # package. This is the file the original docs/ copy came from (byte-identical), and
+          # ESP Web Tools needs it at 0xE000 to select an OTA slot on first boot.
+          BOOT_APP0="$(find "$HOME/.platformio/packages" -name boot_app0.bin -print -quit)"
+          test -n "$BOOT_APP0" || { echo "boot_app0.bin not found in the framework package"; exit 1; }
+          cp "$BOOT_APP0" out/
           ls -l out
           # ESP Web Tools needs the erase+write offsets in docs/manifest.json to line up with
           # this partition table; fail loudly if the layout ever changes.
           python3 - <<'PY'
-          import json, pathlib, sys
+          import json, sys
           parts = {p["path"].rsplit("/", 1)[-1]: p["offset"]
                    for p in json.load(open("docs/manifest.json"))["builds"][0]["parts"]}
           want = {"bootloader.bin": 0, "partitions.bin": 32768, "boot_app0.bin": 57344,
