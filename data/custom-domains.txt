@@ -153,3 +153,13 @@ mentamob.com
 # ---- 继续挂起（身份仍未证实）----
 # uycdn13.cn：主机名 ad2jsv6-* 带广告前缀，但归属未查证
 # uycdn13.cn
+
+# ---- 2026-10-09 抓包 round 5（c3-dns-capture-5.csv，视频观看场景）----
+# 同一广告请求簇（777 秒窗口）内与已确认 SDK（vlion/mentamob 系）同时出现的竞价端点
+hangzhoumengfa.com
+
+# ---- 继续挂起 ----
+# aishuttler.com：ngpool.*，与上同簇但身份未明
+# aishuttler.com
+# digitalcloudshield.com：monitor-pro.*，风控/监控类命名，拦了可能影响 App 风控
+# digitalcloudshield.com
