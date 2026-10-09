@@ -51,7 +51,7 @@ jobs:
           # already fails the build, but this catches a parse regression that still lands a
           # plausible total size (Hagezi alone is ~57k, enough to mask a missing CN source).
           for src in hagezi anti-AD adblockfilters home-dns-adblock adrules; do
-            grep -q "$src" build.log || { echo "missing source in build: $src"; exit 1; }
+            grep -qi "$src" build.log || { echo "missing source in build: $src"; exit 1; }
           done
           # Parent-redundant pruning must actually be running: without it the blob is
           # ~70 KB larger for zero behavioral difference, so a silent regression to
