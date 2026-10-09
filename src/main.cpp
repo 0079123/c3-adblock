@@ -747,7 +747,12 @@ static void reopenBlocklist() {
     numHashes = blocklist ? blocklist.size() / HASH_BYTES : 0;
     buildFlashIndex();
     if (numHashes == 0) return;
-    if (unpackHash(blIndex[0]) <= unpackHash(blIndex[INDEX_ENTRIES - 1])) return;
+    // Strict: ANY out-of-order sample (a zeroed entry anywhere) wedges its bucket's
+    // lookups, so require full non-decreasing order, not just first <= last.
+    bool sane = true;
+    for (int i = 1; sane && i < INDEX_ENTRIES; i++)
+      if (unpackHash(blIndex[i]) < unpackHash(blIndex[i - 1])) sane = false;
+    if (sane) return;
     if (attempt < 4) delay(200);
   }
   Serial.println("[blocklist] FATAL: flash index unusable after retries -- refetch or reboot");
