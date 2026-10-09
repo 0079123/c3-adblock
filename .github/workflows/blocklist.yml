@@ -37,7 +37,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build default blocklist (fails if any source is unreachable or shrunk)
-        run: python3 tools/build_blocklist.py blocklist.bin --with-hda 2>&1 | tee build.log
+        run: |
+          set -o pipefail
+          python3 tools/build_blocklist.py blocklist.bin --with-hda 2>&1 | tee build.log
       - name: Sanity checks
         run: |
           size=$(stat -c%s blocklist.bin)

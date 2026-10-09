@@ -69,11 +69,12 @@ ADBLOCKFILTERS_DOMAINS = 'https://raw.githubusercontent.com/217heidai/adblockfil
 # source, so the annotations there explain each exception.
 ADWARS_HOSTS = 'https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts'
 
-# Cats-Team/AdRules DNS list (daily, adrules.top). Measured against the five sources
-# above it adds ~1.4k domains with zero overlap into the playback-CDN families, but
-# nothing for the four TV apps' first-party ad hosts -- kept for the general tail it
-# sweeps that no other source carries.
-ADRULES_DOMAINS = 'https://adrules.top/dns.txt'
+# Cats-Team/AdRules DNS list (daily). Measured against the five sources above it adds
+# ~1.4k domains with zero overlap into the playback-CDN families, but nothing for the
+# four TV apps' first-party ad hosts -- kept for the general tail it sweeps that no
+# other source carries. Use the GitHub raw file: adrules.top itself 403s datacenter
+# IPs (CI), which GitHub serves without fuss.
+ADRULES_DOMAINS = 'https://raw.githubusercontent.com/Cats-Team/AdRules/main/dns.txt'
 
 # Maintainer's own list, kept in-repo (not gitignored) so CI and every local build pick it
 # up. Resolved relative to this script so the build works from any cwd. Add domains here
