@@ -1,0 +1,79 @@
+name: blocklist
+
+# Rebuilds the default blocklist daily and publishes it at a stable URL:
+#   https://github.com/0079123/c3-adblock/releases/download/blocklist/blocklist.bin
+# Point a device's "Remote auto-update" at that URL and it stays current on its own.
+#
+# The list merges Hagezi Light + anti-AD + 217heidai's lite domain list with
+# home-dns-adblock's CN app rules, all pulled live so upstream rule updates land here
+# with no edit. See tools/build_blocklist.py.
+#
+# GitHub cron is UTC only. Upstreams (Hagezi, 217heidai) publish several times a day, so
+# this runs daily; 19:00 UTC == 03:00 next day in Beijing (UTC+8).
+on:
+  schedule:
+    - cron: "0 19 * * *"   # 03:00 Beijing (UTC+8), daily
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # Everything that changes the published blob must rebuild. data/custom-domains.txt is
+    # the maintainer's own list and gets edited on its own most often -- leaving it out
+    # meant pushing new ad domains published nothing until the next scheduled tick.
+    paths:
+      - 'tools/build_blocklist.py'
+      - 'data/custom-domains.txt'
+      - 'data/flux-blocklist-adguard.txt'
+      - '.github/workflows/blocklist.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build default blocklist (fails if any source is unreachable or shrunk)
+        run: python3 tools/build_blocklist.py blocklist.bin --with-hda 2>&1 | tee build.log
+      - name: Sanity checks
+        run: |
+          size=$(stat -c%s blocklist.bin)
+          echo "size=$size bytes"
+          test $((size % 5)) -eq 0                  # whole 40-bit entries
+          test "$size" -gt 250000                   # >50k entries, catches a silently shrunk list
+          test "$size" -lt 1300000                  # LittleFS is 0x150000 = 1,376,256 B; keep headroom
+          # Every source must actually show up in the build. A moved/renamed upstream file
+          # already fails the build, but this catches a parse regression that still lands a
+          # plausible total size (Hagezi alone is ~57k, enough to mask a missing CN source).
+          for src in hagezi anti-AD adblockfilters home-dns-adblock; do
+            grep -q "$src" build.log || { echo "missing source in build: $src"; exit 1; }
+          done
+          # Parent-redundant pruning must actually be running: without it the blob is
+          # ~70 KB larger for zero behavioral difference, so a silent regression to
+          # --no-prune should be loud rather than just a bigger file.
+          grep -q 'parent-redundant' build.log || { echo "pruning did not run"; exit 1; }
+          echo "all sources present, pruning active"
+      - name: Publish to the 'blocklist' release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          entries=$(( $(stat -c%s blocklist.bin) / 5 ))
+          notes="Auto-built $(date -u +%F) — ${entries} entries.
+          Sources: Hagezi Light + anti-AD + home-dns-adblock (CN app ads).
+
+          Tuned for CN networks (video/App/web ads). Playback-safe: qznovelvod.com,
+          fqnovelpic.com, douyincdn.com, douyinliving.com are excluded, with
+          *-reading-ad.* ad endpoints kept blocked via their own hash. Public DoH
+          resolvers (dns.alidns.com, doh.pub) are excluded so the LAN keeps DNS.
+
+          Set this as the device's Remote auto-update URL:
+          https://github.com/${{ github.repository }}/releases/download/blocklist/blocklist.bin"
+          if gh release view blocklist >/dev/null 2>&1; then
+            gh release edit blocklist --notes "$notes"
+          else
+            gh release create blocklist --title "Daily blocklist" --notes "$notes" --latest=false
+          fi
+          gh release upload blocklist blocklist.bin --clobber

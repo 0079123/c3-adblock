@@ -1,0 +1,104 @@
+name: firmware
+
+# Builds the ESP32-C3 image and publishes it to the `firmware` release, which is what
+# docs/manifest.json points the browser web-installer at.
+#
+# Why this exists: `build` only compiles to *verify*, so docs/ held hand-built binaries from
+# the initial import. Every fix since then was invisible to anyone flashing from the web
+# installer -- they silently got months-old firmware. Publishing on push keeps the installer
+# current without committing build output to the repo.
+#
+# Only pushes to main publish; pull requests just build.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'data/**'
+      - 'platformio.ini'
+      - 'partitions*.csv'
+      - 'tools/build_blocklist.py'
+      - '.github/workflows/firmware.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+      - run: pip install -U platformio
+
+      # Refuse to publish firmware built from a tree whose rule tooling is broken.
+      - name: Unit tests
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: Embedded web UI checks
+        run: python3 tools/check_ui.py
+
+      - name: Placeholder secrets (real ones are gitignored; a new unit falls back to the setup portal)
+        run: cp src/secrets.example.h src/secrets.h
+
+      - run: pio run -e c3
+
+      # The filesystem image carries the blocklist. data/blocklist.bin is gitignored, so pull
+      # the published one -- otherwise a web-installer flash lands with an empty ruleset.
+      - name: Fetch the latest blocklist for the filesystem image
+        run: |
+          mkdir -p data
+          curl -fsSL -o data/blocklist.bin \
+            "https://github.com/${{ github.repository }}/releases/download/blocklist/blocklist.bin"
+          test -s data/blocklist.bin
+      - run: pio run -e c3 -t buildfs
+
+      - name: Collect the image parts
+        run: |
+          set -eu
+          B=.pio/build/c3
+          mkdir -p out
+          cp "$B/firmware.bin"    out/
+          cp "$B/bootloader.bin"  out/
+          cp "$B/partitions.bin"  out/
+          cp "$B/boot_app0.bin"   out/
+          cp "$B/littlefs.bin"    out/
+          ls -l out
+          # ESP Web Tools needs the erase+write offsets in docs/manifest.json to line up with
+          # this partition table; fail loudly if the layout ever changes.
+          python3 - <<'PY'
+          import json, pathlib, sys
+          parts = {p["path"].rsplit("/", 1)[-1]: p["offset"]
+                   for p in json.load(open("docs/manifest.json"))["builds"][0]["parts"]}
+          want = {"bootloader.bin": 0, "partitions.bin": 32768, "boot_app0.bin": 57344,
+                  "firmware.bin": 65536, "littlefs.bin": 2818048}
+          for name, off in want.items():
+              got = parts.get(name)
+              if got != off:
+                  sys.exit(f"manifest offset mismatch for {name}: manifest={got} expected={off}")
+          print("manifest offsets match the partition layout")
+          PY
+
+      - name: Publish to the firmware release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG=firmware
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Firmware (ESP32-C3)" \
+              --notes "Web-installer image. Also used by docs/manifest.json."
+          fi
+          gh release upload "$TAG" out/*.bin --clobber
+          gh release edit "$TAG" --notes \
+            "Auto-built from ${GITHUB_SHA:0:7} on $(date -u +%Y-%m-%d).
+
+          Flash at the GitHub Pages installer, or download firmware.bin for USB upload.
+          Includes the blocklist published by the blocklist workflow."
