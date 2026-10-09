@@ -34,7 +34,7 @@ stream down with the ads, and blocking a public DoH resolver takes the LAN offli
 the DEFAULT_PROTECT comment.
 """
 import re
-import sys, os, math, urllib.request
+import sys, os, math, socket, ipaddress, tempfile, pathlib, urllib.request, urllib.parse
 
 HASH_BYTES = 5                          # 40-bit hashes -- must match firmware
 MASK = (1 << (HASH_BYTES * 8)) - 1
@@ -168,11 +168,48 @@ def norm(d: str) -> str:
     d = d.strip().lower().lstrip('*').lstrip('.').rstrip('.')
     return d[4:] if d.startswith('www.') else d
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    # redirect_request returning None makes urllib raise on the 3xx instead of following it.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+def write_output(path: str, blob: bytes) -> None:
+    # Normalize and validate right at the sink: no .. components, and the resolved
+    # location must stay inside the repo tree (CI, maintainer) or the OS temp dir
+    # (test harness).
+    if '..' in os.path.normpath(path).split(os.sep):
+        sys.exit(f'output path may not contain .. components: {path}')
+    real = os.path.realpath(path)
+    parent = os.path.dirname(real)
+    for base in (os.getcwd(), tempfile.gettempdir()):
+        base = os.path.realpath(base)
+        if parent == base or parent.startswith(base + os.sep):
+            pathlib.Path(real).write_bytes(blob)
+            return
+    sys.exit(f'output path must stay under the working directory or the system '
+             f'temp dir, got: {path}')
+
 def read_source(src: str) -> str:
     if os.path.exists(src):
         return open(src, errors='ignore').read()
+    # SSRF guard for the fetch path. This tool runs on the maintainer's machine and in
+    # CI and only ever needs public list hosts, so: https with a hostname, nothing that
+    # resolves to a non-public address (private, loopback, link-local -- which also
+    # covers cloud metadata endpoints), and redirects refused (a 3xx could point
+    # anywhere; real list sources never redirect).
+    parsed = urllib.parse.urlparse(src)
+    if parsed.scheme != 'https' or not parsed.hostname:
+        sys.exit(f'remote sources must be https URLs with a hostname, got: {src}')
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        sys.exit(f'cannot resolve {parsed.hostname}: {e}')
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            sys.exit(f'{parsed.hostname} resolves to a non-public address ({ip}); refusing')
     print(f'  downloading {src} ...', file=sys.stderr)
-    return urllib.request.urlopen(src, timeout=180).read().decode('utf-8', 'ignore')
+    return urllib.request.build_opener(_NoRedirect()).open(src, timeout=180).read().decode('utf-8', 'ignore')
 
 # Ad endpoints that legitimately live UNDER a protected playback parent. The parent must
 # be un-blocked (it carries the real stream) while these stay blocked by their own hash.
@@ -276,6 +313,13 @@ def main():
     pf_val = [raw[raw.index('--protect-file') + 1]] if '--protect-file' in flags else []
     args = [a for a in raw if not a.startswith('--') and a not in pf_val]
     out = args[0] if args else 'blocklist.bin'
+    # The blob is only ever written to the repo tree (CI, maintainer) or the OS temp dir
+    # (the test harness); refuse any path that would land anywhere else.
+    out_dir = os.path.dirname(os.path.abspath(out))
+    allowed = (os.getcwd(), tempfile.gettempdir())
+    if not any(os.path.commonpath([out_dir, base]) == base for base in allowed):
+        sys.exit(f'output path must stay under the working directory or the system '
+                 f'temp dir, got: {out}')
 
     if args[1:]:
         sources = args[1:]
@@ -366,9 +410,8 @@ def main():
     hashes = sorted(fnv(d.encode()) for d in domains)
     collisions = len(hashes) - len(set(hashes))
     uniq = sorted(set(hashes))                       # one entry per distinct hash
-    with open(out, 'wb') as f:
-        for h in uniq:
-            f.write(h.to_bytes(HASH_BYTES, 'little'))
+    blob = b''.join(h.to_bytes(HASH_BYTES, 'little') for h in uniq)
+    write_output(out, blob)
 
     n, size = len(uniq), len(uniq) * HASH_BYTES
     print(f'sources          : {len(sources)}')
