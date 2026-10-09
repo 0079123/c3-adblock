@@ -209,7 +209,9 @@ The dashboard at **http://c3adblock.local** does it all:
   ```
 
 **4 MB flash tradeoff:** firmware OTA needs *two* app slots, which leaves ~1.3 MB for the
-blocklist (**~250k domains max**). The aggressive 537k "ultimate" list only fits the
+blocklist. The practical ceiling is **~135k domains (~675 KB)**: an OTA swap
+writes the new list alongside the live one, so old + new must coexist in the
+partition. The aggressive 537k "ultimate" list only fits the
 single-app partition table (no firmware OTA). Pick your tradeoff in `partitions.csv`.
 
 ## Security

@@ -46,11 +46,14 @@ jobs:
           echo "size=$size bytes"
           test $((size % 5)) -eq 0                  # whole 40-bit entries
           test "$size" -gt 250000                   # >50k entries, catches a silently shrunk list
-          test "$size" -lt 1300000                  # LittleFS is 0x150000 = 1,376,256 B; keep headroom
+          # Not 1,376,256 (the partition): the device's OTA swap writes /blocklist.new
+          # while the live file stays, so old + new must coexist -- 2x size + fs overhead
+          # has to fit. Field-verified at 1,173,790 B: the swap is rejected ("bad data").
+          test "$size" -lt 685000                   # ~137k entries; swap-safe coexistence budget
           # Every source must actually show up in the build. A moved/renamed upstream file
           # already fails the build, but this catches a parse regression that still lands a
           # plausible total size (Hagezi alone is ~57k, enough to mask a missing CN source).
-          for src in hagezi anti-AD adblockfilters home-dns-adblock adrules; do
+          for src in hagezi anti-AD adblockfilters home-dns-adblock; do
             grep -qi "$src" build.log || { echo "missing source in build: $src"; exit 1; }
           done
           # Parent-redundant pruning must actually be running: without it the blob is
@@ -67,7 +70,7 @@ jobs:
         run: |
           entries=$(( $(stat -c%s blocklist.bin) / 5 ))
           notes="Auto-built $(date -u +%F) — ${entries} entries.
-          Sources: Hagezi Light + anti-AD + 217heidai + ad-wars + AdRules + home-dns-adblock (CN app ads).
+          Sources: Hagezi Light + anti-AD + 217heidai + ad-wars + home-dns-adblock (CN app ads).
 
           Tuned for CN networks (video/App/web ads). Playback-safe: qznovelvod.com,
           fqnovelpic.com, douyincdn.com, douyinliving.com are excluded, with
