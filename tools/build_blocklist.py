@@ -69,6 +69,12 @@ ADBLOCKFILTERS_DOMAINS = 'https://raw.githubusercontent.com/217heidai/adblockfil
 # source, so the annotations there explain each exception.
 ADWARS_HOSTS = 'https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts'
 
+# Cats-Team/AdRules DNS list (daily, adrules.top). Measured against the five sources
+# above it adds ~1.4k domains with zero overlap into the playback-CDN families, but
+# nothing for the four TV apps' first-party ad hosts -- kept for the general tail it
+# sweeps that no other source carries.
+ADRULES_DOMAINS = 'https://adrules.top/dns.txt'
+
 # Maintainer's own list, kept in-repo (not gitignored) so CI and every local build pick it
 # up. Resolved relative to this script so the build works from any cwd. Add domains here
 # after confirming them from a device capture -- see the notes inside the file.
@@ -91,6 +97,7 @@ DEFAULT_SOURCES = [
     ANTIAD_DOMAINS,             # anti-AD: CN ads/trackers (web + app)
     ADBLOCKFILTERS_DOMAINS,     # 217heidai lite domain list: Youku/iQiyi/MangoTV ad hosts
     ADWARS_HOSTS,               # jdlingyu/ad-wars: CN app ads (see DEFAULT_PROTECT for its exceptions)
+    ADRULES_DOMAINS,            # Cats-Team/AdRules DNS list: general CN tail the rest miss
     CUSTOM_DOMAINS,             # data/custom-domains.txt: hand-picked additions
     FLUX_DOMAINS,               # data/flux-blocklist-adguard.txt: capture-verified list
 ]

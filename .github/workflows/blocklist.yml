@@ -48,7 +48,7 @@ jobs:
           # Every source must actually show up in the build. A moved/renamed upstream file
           # already fails the build, but this catches a parse regression that still lands a
           # plausible total size (Hagezi alone is ~57k, enough to mask a missing CN source).
-          for src in hagezi anti-AD adblockfilters home-dns-adblock; do
+          for src in hagezi anti-AD adblockfilters home-dns-adblock adrules; do
             grep -q "$src" build.log || { echo "missing source in build: $src"; exit 1; }
           done
           # Parent-redundant pruning must actually be running: without it the blob is
@@ -62,7 +62,7 @@ jobs:
         run: |
           entries=$(( $(stat -c%s blocklist.bin) / 5 ))
           notes="Auto-built $(date -u +%F) — ${entries} entries.
-          Sources: Hagezi Light + anti-AD + home-dns-adblock (CN app ads).
+          Sources: Hagezi Light + anti-AD + 217heidai + ad-wars + AdRules + home-dns-adblock (CN app ads).
 
           Tuned for CN networks (video/App/web ads). Playback-safe: qznovelvod.com,
           fqnovelpic.com, douyincdn.com, douyinliving.com are excluded, with
