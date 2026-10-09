@@ -57,6 +57,11 @@ static const size_t MAX_BLOCKLIST_BYTES = 0x150000;
 // one. Set by the fetcher and the uploader, checked by commitNewBlocklist().
 static size_t expectedBlocklistBytes = 0;
 
+// millis() timestamp for the deferred second index rebuild after a swap -- see
+// reopenBlocklist(): the first build can sample the previous blob through an unsettled
+// cache layer and still look monotonic, so loop() reopens once more after 3 s.
+static uint32_t indexRebuildDue = 0;
+
 // ---- globals ----
 WiFiUDP dnsServer, upstreamCli;
 WebServer web(80);
@@ -736,7 +741,7 @@ static void handleBan() {
 // is renamed into place. Call order matters: fetch/upload into /blocklist.new FIRST,
 // then commit. An aborted transfer therefore leaves the existing list untouched --
 // fail-safe (keep blocking with the old list) instead of fail-open (block nothing).
-static void reopenBlocklist() {
+static void reopenBlocklist(bool afterSwap = false) {
   // LittleFS can still be flushing a freshly swapped blob, and buildFlashIndex then
   // zeroes unreadable samples -- a zeroed LAST entry makes `h > last` short-circuit
   // every lookup, silently disabling the whole list while the dashboard keeps showing
@@ -752,7 +757,14 @@ static void reopenBlocklist() {
     bool sane = true;
     for (int i = 1; sane && i < INDEX_ENTRIES; i++)
       if (unpackHash(blIndex[i]) < unpackHash(blIndex[i - 1])) sane = false;
-    if (sane) return;
+    if (sane) {
+      // A stale-but-monotonic index (built against the previous blob through a not
+      // yet settled cache layer) also passes this check -- field-verified: after a
+      // swap the whole table can still forward until the file settles. One delayed
+      // rebuild settles it; loop() runs it and re-clears the hash cache.
+      if (afterSwap) indexRebuildDue = millis() + 3000;
+      return;
+    }
     if (attempt < 4) delay(200);
   }
   Serial.println("[blocklist] FATAL: flash index unusable after retries -- refetch or reboot");
@@ -760,7 +772,7 @@ static void reopenBlocklist() {
 static void discardPendingBlocklist() {             // aborted transfer -> drop the partial
   if (blocklist) blocklist.close();
   LittleFS.remove("/blocklist.new");
-  reopenBlocklist();                                // keep serving the live list
+  reopenBlocklist(true);                            // keep serving the live list
 }
 static bool commitNewBlocklist() {                  // /blocklist.new -> live (validated)
   File f = LittleFS.open("/blocklist.new", "r");
@@ -787,13 +799,13 @@ static bool commitNewBlocklist() {                  // /blocklist.new -> live (v
     if (blocklist) blocklist.close();
     if (!LittleFS.rename("/blocklist.new", BLOCKLIST_PATH)) {
       Serial.println("[blocklist] rename failed -- keeping existing list");
-      reopenBlocklist();                            // live file untouched -> still serving
+      reopenBlocklist(true);                        // live file untouched -> still serving
       return false;
     }
   } else {
     LittleFS.remove("/blocklist.new");
   }
-  reopenBlocklist();
+  reopenBlocklist(true);
   return ok;
 }
 
@@ -835,7 +847,7 @@ static void handleUpload() {
     case UPLOAD_FILE_ABORTED:
       if (!upAuthOk) break;
       if (upFile) upFile.close();
-      LittleFS.remove("/blocklist.new"); reopenBlocklist();
+      LittleFS.remove("/blocklist.new"); reopenBlocklist(true);
       Serial.println("[ota] aborted");
       break;
   }
@@ -1325,6 +1337,10 @@ void loop() {
   ArduinoOTA.handle();
   web.handleClient();
   bool busy = handleDns();
+  if (indexRebuildDue && (int32_t)(millis() - indexRebuildDue) >= 0) {
+    indexRebuildDue = 0;
+    reopenBlocklist();          // second pass once the swap's flush has settled
+  }
   if (!blockingOn && resumeAt && (int32_t)(millis() - resumeAt) >= 0) { blockingOn = true; resumeAt = 0; }
   if (updateUrl.length()) {               // periodic remote blocklist auto-update
     uint32_t now = millis();
