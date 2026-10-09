@@ -69,6 +69,7 @@ static uint32_t indexRebuildDue = 0;
 // instead of quietly forwarding every ad.
 static uint64_t indexCanary = 0;
 static uint32_t canaryNextAt = 0;
+static uint8_t canaryFails = 0;       // consecutive confident canary misses
 
 // ---- globals ----
 WiFiUDP dnsServer, upstreamCli;
@@ -1356,11 +1357,37 @@ void loop() {
     bool reliable = true;
     // The canary hash is in the list by construction, so a confident miss means every
     // lookup is failing right now (field-verified failure mode: ad domains silently
-    // forward for whole sessions). Rebuild immediately instead of waiting for someone
-    // to notice; unreliable reads are ignored, matching inFlash's own rule.
+    // forward for whole sessions). Rebuild immediately; unreliable reads are ignored,
+    // matching inFlash's own rule.
     if (!inFlash(indexCanary, &reliable) && reliable) {
-      Serial.println("[blocklist] canary lookup failed -- index compromised, rebuilding");
-      reopenBlocklist(true);
+      canaryFails++;
+      // Field round three: the wedge survives rebuilds because littlefs keeps serving
+      // the previous blob's bytes through its caches -- only a fresh mount (reboot)
+      // clears it. Restart after the third consecutive failure, with a persisted
+      // guard so a genuinely broken flash cannot trap the device in a reboot loop:
+      // three restarts without 10 healthy minutes stops the cycle.
+      Serial.printf("[blocklist] canary failed x%d -- index compromised\n", canaryFails);
+      if (canaryFails >= 3) {
+        prefs.begin("blk", false);
+        uint8_t restarts = prefs.getUChar("restarts", 0);
+        if (restarts >= 3) {
+          prefs.end();
+          Serial.println("[blocklist] restart guard tripped -- staying up, refetch manually");
+        } else {
+          prefs.putUChar("restarts", restarts + 1);
+          prefs.end();
+          Serial.println("[blocklist] restarting to clear the wedged filesystem");
+          delay(100);
+          ESP.restart();
+        }
+      } else {
+        reopenBlocklist(true);
+      }
+    } else if (canaryFails) {
+      canaryFails--;                       // healthy probe: decay toward re-arming restarts
+      if (millis() > 600000 && canaryFails == 0) {   // 10 healthy minutes: clear the guard
+        prefs.begin("blk", false); prefs.putUChar("restarts", 0); prefs.end();
+      }
     }
   }
   if (!blockingOn && resumeAt && (int32_t)(millis() - resumeAt) >= 0) { blockingOn = true; resumeAt = 0; }
