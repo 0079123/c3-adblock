@@ -1,14 +1,20 @@
 name: firmware
 
-# Builds the ESP32-C3 image and publishes it to the `firmware` release, which is what
-# docs/manifest.json points the browser web-installer at.
+# Builds and publishes the ESP32-C3 and classic-ESP32 images to the rolling `firmware`
+# release. Single owner of that release: two workflows publishing to the same tag would
+# fight over the notes and leave a confusing mix of assets.
 #
-# Why this exists: `build` only compiles to *verify*, so docs/ held hand-built binaries from
-# the initial import. Every fix since then was invisible to anyone flashing from the web
-# installer -- they silently got months-old firmware. Publishing on push keeps the installer
-# current without committing build output to the repo.
+# What lands there, and who consumes it:
+#   firmware-c3.bin          C3 app -- both the browser installer (docs/manifest.json) and
+#                            the README's dashboard OTA flow
+#   firmware-esp32dev.bin    classic ESP32 app, OTA only
+#   bootloader.bin           \
+#   partitions.bin            |  browser installer only; ESP Web Tools writes these to
+#   boot_app0.bin             |  fixed offsets, so they ship alongside the app
+#   littlefs.bin             /   the filesystem image, blocklist included
 #
-# Only pushes to main publish; pull requests just build.
+# Only pushes to main publish; pull requests are covered by the `build` workflow, which
+# just compiles both boards.
 
 on:
   push:
@@ -45,7 +51,7 @@ jobs:
       - name: Embedded web UI checks
         run: python3 tools/check_ui.py
 
-      - name: Placeholder secrets (real ones are gitignored; a new unit falls back to the setup portal)
+      - name: Placeholder secrets (real ones are gitignored; the firmware falls back to the setup portal)
         run: cp src/secrets.example.h src/secrets.h
 
       - run: pio run -e c3
@@ -60,30 +66,35 @@ jobs:
           test -s data/blocklist.bin
       - run: pio run -e c3 -t buildfs
 
-      - name: Collect the image parts
+      - run: pio run -e esp32dev
+
+      - name: Collect the release assets
         run: |
           set -eu
-          B=.pio/build/c3
           mkdir -p out
-          cp "$B/firmware.bin"    out/
-          cp "$B/bootloader.bin"  out/
-          cp "$B/partitions.bin"  out/
-          cp "$B/littlefs.bin"    out/
+          # App images are named after the board so the OTA URL is unambiguous.
+          cp .pio/build/c3/firmware.bin        out/firmware-c3.bin
+          cp .pio/build/esp32dev/firmware.bin  out/firmware-esp32dev.bin
+          # Installer-only parts, all from the C3 build.
+          cp .pio/build/c3/bootloader.bin out/
+          cp .pio/build/c3/partitions.bin out/
+          cp .pio/build/c3/littlefs.bin   out/
           # PlatformIO does not emit boot_app0.bin; it ships inside the Arduino framework
-          # package. This is the file the original docs/ copy came from (byte-identical), and
-          # ESP Web Tools needs it at 0xE000 to select an OTA slot on first boot.
+          # package (the file the original docs/ copy came from -- byte-identical). ESP Web
+          # Tools needs it at 0xE000 to select an OTA slot on first boot.
           BOOT_APP0="$(find "$HOME/.platformio/packages" -name boot_app0.bin -print -quit)"
           test -n "$BOOT_APP0" || { echo "boot_app0.bin not found in the framework package"; exit 1; }
           cp "$BOOT_APP0" out/
           ls -l out
-          # ESP Web Tools needs the erase+write offsets in docs/manifest.json to line up with
-          # this partition table; fail loudly if the layout ever changes.
+
+          # The offsets in docs/manifest.json must match this partition table, or the
+          # installer writes the app over the wrong region.
           python3 - <<'PY'
           import json, sys
           parts = {p["path"].rsplit("/", 1)[-1]: p["offset"]
                    for p in json.load(open("docs/manifest.json"))["builds"][0]["parts"]}
           want = {"bootloader.bin": 0, "partitions.bin": 32768, "boot_app0.bin": 57344,
-                  "firmware.bin": 65536, "littlefs.bin": 2818048}
+                  "firmware-c3.bin": 65536, "littlefs.bin": 2818048}
           for name, off in want.items():
               got = parts.get(name)
               if got != off:
@@ -97,13 +108,17 @@ jobs:
         run: |
           set -eu
           TAG=firmware
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "Firmware (ESP32-C3)" \
-              --notes "Web-installer image. Also used by docs/manifest.json."
+          notes="Auto-built from ${GITHUB_SHA:0:7} on $(date -u +%Y-%m-%d).
+
+          Browser install: https://0079123.github.io/c3-adblock/
+
+          OTA: upload firmware-c3.bin under *Firmware -> OTA update* in the device dashboard
+          (firmware-esp32dev.bin for a classic ESP32). Built with placeholder credentials, so
+          a fresh unit starts the setup portal -- set WEB_USER / WEB_PASS / OTA_PASS there.
+          littlefs.bin carries the blocklist published by the blocklist workflow."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$notes"
+          else
+            gh release create "$TAG" --title "Firmware" --notes "$notes"
           fi
           gh release upload "$TAG" out/*.bin --clobber
-          gh release edit "$TAG" --notes \
-            "Auto-built from ${GITHUB_SHA:0:7} on $(date -u +%Y-%m-%d).
-
-          Flash at the GitHub Pages installer, or download firmware.bin for USB upload.
-          Includes the blocklist published by the blocklist workflow."
