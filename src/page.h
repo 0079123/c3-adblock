@@ -79,7 +79,7 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  hCap:'抓包 — DNS 查询记录 (CAPTURE)',
  btnCapStart:'开始抓包',btnCapStop:'停止抓包',btnCapApply:'应用过滤',btnCapClear:'清空',btnCapCsv:'下载 CSV',
  thCapDomain:'域名',thCapHits:'次数',thCapResult:'结果',thCapClient:'客户端',
- capQueries:'次查询',capDistinct:'个域名',capReboot:'设备曾重启，抓包记录已清空。原因: ',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录'
+ capQueries:'次查询',capDistinct:'个域名',capReboot:'设备曾重启，抓包记录已清空。原因: ',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录',
 
  capOn:'● 抓包中',capOff:'○ 未抓包',capEmpty:'暂无记录 —— 点「开始抓包」，然后在 App 里复现广告',
  capHint:'点「开始抓包」后复现漏网的广告（开始时会【自动清空过滤】，确保抓到全部请求，之后再按需过滤）；下方列表和 CSV 会显示设备收到的全部查询，以及每一条是否被拦截。过滤框可只记录含指定关键词的域名（如 iqiyi）。',
@@ -281,18 +281,34 @@ function capClear(){
   api('/capture?clear=1').then(function(){capFilter.value='';capLoad()}).catch(function(){});
 }
 function forgetWifi(){if(!confirm(t('forgetConfirm')))return;fetch('/forgetwifi',{headers:CSRF_HDRS}).then(r=>r.text()).then(x=>alert(x))}
+// Each top-level init step is isolated. These run in one script body, so before this a
+// single bad reference anywhere in the wiring below -- an id that got renamed or dropped --
+// threw before the last lines executed, and the failure looked like "some panels just
+// never load": applyLang() never ran so every label stayed blank, capLoad() never ran so
+// the capture table stayed empty, and setInterval(load) was never scheduled so the stats
+// froze at their initial values. One typo, many unrelated-looking symptoms.
+//
+// This is the same class as the options[0] crash, but that one is now caught statically by
+// tools/check_ui.py; isolation is what keeps an unseen case from blanking everything else.
+function bootStep(name,fn){try{fn()}catch(e){if(window.console)console.error('init failed: '+name,e)}}
+bootStep('firmware-upload',function(){
 fwf.onsubmit=async e=>{e.preventDefault();let f=fwb.files[0];if(!f)return;fwmsg.textContent=t('fwFlashing')+' '+(f.size/1048576).toFixed(2)+' MB...';
 let fd=new FormData();fd.append('f',f);
 try{let r=await fetch('/update',{method:'POST',headers:CSRF_HDRS,body:fd});fwmsg.textContent=r.ok?'✓ '+t('fwDone'):'✗ '+await r.text();}
 catch(_){fwmsg.textContent='✓ '+t('fwDone');}};
+});
+bootStep('blocklist-upload',function(){
 upf.onsubmit=async e=>{e.preventDefault();let f=blf.files[0];if(!f)return;
 upmsg.textContent=t('updUploading')+' '+(f.size/1048576).toFixed(2)+' MB...';
 let fd=new FormData();fd.append('f',f);
 try{let r=await fetch('/upload',{method:'POST',headers:CSRF_HDRS,body:fd});upmsg.textContent=r.ok?'✓ '+t('updUpdated'):'✗ '+await r.text();}
 catch(_){upmsg.textContent='✗ '+t('updFailed');}
 blf.value='';setTimeout(load,600);};
-applyLang(cur()||((navigator.language||'en').toLowerCase().indexOf('zh')===0?'zh':'en'));
-capLoad();
-setInterval(load,3000);
-setInterval(function(){if(capIsOn)capLoad()},3000);
+});
+// Labels first, then the panels, then the timers -- each independent of the others.
+bootStep('language',function(){applyLang(cur()||((navigator.language||'en').toLowerCase().indexOf('zh')===0?'zh':'en'))});
+bootStep('stats',load);        // paint immediately instead of waiting for the first tick
+bootStep('capture',capLoad);
+setInterval(function(){bootStep('stats-tick',load)},3000);
+setInterval(function(){if(capIsOn)bootStep('capture-tick',capLoad)},3000);
 </script></body></html>)HTML";

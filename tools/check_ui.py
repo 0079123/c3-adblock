@@ -10,8 +10,11 @@ JavaScript was syntactically valid, so a syntax check cannot see it -- only
 Run from the repo root:  python3 tools/check_ui.py
 """
 import re
+import shutil
+import subprocess
 import sys
 import pathlib
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 fails = []
@@ -21,6 +24,35 @@ def check(cond, msg):
     print(("  OK   " if cond else "  FAIL ") + msg)
     if not cond:
         fails.append(msg)
+
+
+def check_js_syntax(js, label):
+    """Parse the embedded script with a real JS engine.
+
+    Every other check here is a regex over the source, and a regex cannot see a syntax
+    error -- which is how a missing comma shipped: zh and en are two properties of one
+    object literal, so dropping a single comma between entries made the whole <script> fail
+    to parse and NOTHING ran. Every label stayed blank and no panel ever loaded, so the page
+    looked half-built rather than broken. Node is preinstalled on GitHub runners; where it
+    is absent, say so rather than implying the check passed.
+    """
+    node = shutil.which('node')
+    if not node:
+        print(f"  SKIP {label}: node not on PATH, JS syntax unchecked")
+        return
+    with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as fh:
+        fh.write(js)
+        path = fh.name
+    try:
+        r = subprocess.run([node, '--check', path], capture_output=True, text=True)
+    finally:
+        pathlib.Path(path).unlink(missing_ok=True)
+    if r.returncode == 0:
+        check(True, f"{label} JS 语法正确")
+    else:
+        lines = [l for l in (r.stderr or '').splitlines() if l.strip()]
+        first = next((l for l in lines if 'Error' in l), lines[0] if lines else 'unknown')
+        check(False, f"{label} JS 语法错误 -> {first.strip()}")
 
 
 SKIP = {'window', 'document', 'console', 'Math', 'String', 'Object', 'Number',
@@ -47,9 +79,14 @@ for blob in re.findall(r"function\s*[\w$]*\s*\(([^)]*)\)", js):
         if p_:
             params.add(p_)
 locals_ |= params
+# Property list widened after a near-miss: the OTA/blocklist form wiring touches
+# fwf.onsubmit / fwb.files / upf.onsubmit / blf.files, none of which the original list
+# covered. Dropping id=fwf would therefore have passed this check and then thrown during
+# init, which is the exact failure mode the isolation in page.h now contains.
 refs = set(re.findall(
     r"(?:^|[;\s(])([a-z][A-Za-z0-9_]*)\s*\.\s*"
-    r"(?:textContent|innerHTML|style|placeholder|value|dataset)", js))
+    r"(?:textContent|innerHTML|innerText|style|placeholder|value|dataset|"
+    r"onsubmit|onclick|onchange|oninput|files|checked|disabled|classList|tBodies)", js))
 missing = sorted(r for r in refs - ids - SKIP - locals_)
 check(not missing, f"脚本引用的 DOM id 都存在 (缺失: {missing or '无'})")
 
@@ -77,14 +114,31 @@ check(zh == en, f"仪表盘 zh/en 键一致 ({len(zh)} / {len(en)})")
 check(not (used_keys - zh), f"t() 的键都已定义 (缺失: {sorted(used_keys - zh) or '无'})")
 check(not (zh - used_keys), f"无多余未用键 (多余: {sorted(zh - used_keys) or '无'})")
 
+# 4. the script must actually parse. Regexes above cannot see a syntax error, and one
+#    dropped comma between dictionary entries blanks the entire dashboard.
+check_js_syntax(js, "仪表盘")
+
 # ---------------- captive portal (src/main.cpp) ----------------
 main = (ROOT / 'src/main.cpp').read_text(encoding='utf-8')
 blk = re.search(r'static void handlePortalRoot\(\) \{(.*?)\n\}', main, re.S).group(1)
 # Join the C++ string literals the way the compiler does, so ids/JS are checked
 # on the markup the device actually serves.
-lits = [m.group(1).replace('\\"', '"').replace('\\\\', '\\')
-        for m in re.finditer(r'"((?:\\.|[^"\\])*)"', blk.split('String html =')[1])]
-portal = ''.join(lits)
+#
+# Runtime interpolations must be stood in for: the page is assembled as
+#   "var NETS=" + portalNets + ";"
+# where portalNets is a String built on the device. Joining only the literals yields
+# `var NETS=;`, a syntax error that belongs to this extraction rather than to the served
+# page. Any expression between two literals is therefore replaced by `null` -- the point is
+# to parse everything else, and invalid JS in the literals still shows up.
+_seg = blk.split('String html =')[1]
+_parts, _pos = [], 0
+for _m in re.finditer(r'"((?:\\.|[^"\\])*)"', _seg):
+    _gap = _seg[_pos:_m.start()]
+    if _parts and re.sub(r'[\s+]', '', _gap):
+        _parts.append('null')
+    _parts.append(_m.group(1).replace('\\"', '"').replace('\\\\', '\\'))
+    _pos = _m.end()
+portal = ''.join(_parts)
 pids = set(re.findall(r'id=([A-Za-z_][\w-]*)', portal))
 pjs = re.findall(r'<script>(.*?)</script>', portal, re.S)[0]
 prefs = set(re.findall(
@@ -94,6 +148,7 @@ print(f"配网页: markup 中 {len(pids)} 个 id")
 check(not p_missing, f"配网页脚本引用的 id 都存在 (缺失: {p_missing or '无'})")
 for lang in ('zh', 'en'):
     check(f'{lang}:{{' in pjs, f"配网页含 {lang} 词条")
+check_js_syntax(pjs, "配网页")
 
 print()
 if fails:
