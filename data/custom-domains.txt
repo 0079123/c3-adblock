@@ -133,3 +133,23 @@ bsclink.cn
 bsgslb.cn
 pcdn.ksyun.com
 p2p.baidupcs.com
+
+# ---- 2026-10-09 抓包 round 3+4（c3-dns-capture-3/4.csv）----
+# capture-4 的一分钟窗口内已知广告域全部放行，是那次索引失效发作（设备固件
+# b166ded 起会自动检测重建），不是规则缺口；gdt.qq.com、mobads.baidu.com 等
+# capture-4 里放行的域上游本就覆盖。真正的缺口是以下几条：
+
+# 秒针追踪挂在优酷自己域名下（父域 youku.com 受播放保护，须精确拦）
+miaozhen.youku.com
+# 百度移动广告 SDK（mobads.baidu.com 上游已拦，这是它在百度 shifen CDN 的旁路域）
+mobads.e.shifen.com
+# CPC 广告域，与已拦的 cpc-service-square.aiclk.com 同款主机命名
+iggrowth.cn
+# 趣盟广告（众宸嘉实）RTB/DSP 平台，萤石云等大量 App 内嵌；wiki.adbiding.cn 可证
+adbiding.cn
+# 上海芒拓 ToBid 聚合广告 SDK（腾讯/YY/超级课程表等 App 的第三方清单可证）
+mentamob.com
+
+# ---- 继续挂起（身份仍未证实）----
+# uycdn13.cn：主机名 ad2jsv6-* 带广告前缀，但归属未查证
+# uycdn13.cn
