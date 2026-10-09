@@ -86,9 +86,50 @@ funsdata.com.cn
 # 腾讯云 ias.*：抓包 22 放行 1 拦截，身份未证实；属腾讯云基础设施，宁缺勿滥
 # ias.tencent-cloud.net
 
-# ---- 2026-10-09 用户点名追加：华为云 CDN 调度（抓包见 hcdnw120.* 节点）----
-# ⚠️ 注意：这两个是内容分发调度域，不在任何广告库里。拦了不会少广告，
-# 但走华为云 CDN 的 App/视频可能出现图片/视频加载失败。若出现加载问题，
-# 删掉下面两行并等下一次自动构建即可恢复。
-cdnhwctnm107.com
-cdnhwctyd116.cn
+# ---- 2026-10-09 PCDN/P2P：禁止把用户设备当 CDN 节点（爱奇艺 HCDN 等）----
+# 拦的是各视频 App 的 P2P 上传/调度域，App 会自动回落普通 CDN，观看不受影响，
+# 只是设备不再为平台做 P2P 上传（省上行带宽、避免运营商 PCDN 限速警告）。
+# 来源：社区 PCDN 清单（MosDNS/NodeSeek 汇总）逐条核对，只收纯 PCDN 域；
+# 正规播放接口（api.iqiyi.com、ups.youku.com 等）与上游已覆盖的不在此列。
+# 已被上游覆盖的：tpa-hcdn.iqiyi.com、msg.qy.net/71.am 系、szbdyd.com、
+# pcdn.yximgs.com、uhabo.com、xycdn.com、斗鱼 stun/dyp2p 系等。
+
+# 爱奇艺（HCDN）
+data-qvs.iqiyi.com
+# 腾讯视频 / 腾讯音乐
+vlivep2p.tc.qq.com
+p2ptun.qq.com
+p2p.l.qq.com
+pcdn.l.qq.com
+pcdn-a.l.qq.com
+pcdn-rt.l.qq.com
+p.tencentmusic.com
+# 优酷（当前 NXDOMAIN，防复活）
+p2p.youku.com
+pcdn.youku.com
+# B 站（mcdn 为 P2P 混合边缘，拦后回落 upos 正常 CDN）
+mcdn.bilivideo.cn
+p2p.bilibili.com
+pcdn.bilibili.com
+# 快手
+kspcdn.com
+# 芒果TV / 华数 / 央视
+pcdn.mgtv.com
+p2p.wasu.cn
+pcdn.wasu.cn
+p2p.cctv.cn
+# 迅雷 / 网心云（共享计算，设备当节点的主要来源）
+p2p.xunlei.com
+hub.p2p.xunlei.com
+pcdn.cloud.xunlei.com
+down.sandai.net
+onethingpcs.com
+# 其他 PCDN 厂商域
+ws-p2p.com
+pplive-p2p.com
+yfcloud.com
+kuiniuca.com
+bsclink.cn
+bsgslb.cn
+pcdn.ksyun.com
+p2p.baidupcs.com
