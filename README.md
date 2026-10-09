@@ -202,7 +202,7 @@ The dashboard at **http://c3adblock.local** does it all:
 - **Firmware** — GitHub Actions builds the app image on every push to `main` and publishes
   it at a stable URL (download it, then upload under *Firmware → OTA update*; the device
   verifies it and reboots into the new image):
-  `https://github.com/0079123/c3-adblock/releases/download/firmware/firmware.bin`
+  `https://github.com/0079123/c3-adblock/releases/download/firmware/firmware-c3.bin`
   Or build locally and push over WiFi from the CLI:
   ```bash
   pio run -t upload --upload-port c3adblock.local --upload-protocol espota

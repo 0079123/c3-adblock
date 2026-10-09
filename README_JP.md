@@ -86,7 +86,7 @@ pio device monitor -e c3
 
 - **ブロックリスト**: 新しく作成した`blocklist.bin`を*Blocklist → Upload*からアップロードできます。または、*Remote auto-update*にURLを設定すると、デバイスが定期的に作成済みの`blocklist.bin`を取得します。たとえばGitHubリリースのアセットを指定すれば、一度更新するだけで全デバイスが取得できます。
 - **ファームウェア**: GitHub Actionsが`main`へのpushごとにアプリイメージをビルドし、安定したURLで公開します（ダウンロードして*Firmware → OTA update*からアップロードすると、デバイスは内容を検証してから、新しいイメージで再起動します）:
-  `https://github.com/0079123/c3-adblock/releases/download/firmware/firmware.bin`
+  `https://github.com/0079123/c3-adblock/releases/download/firmware/firmware-c3.bin`
   またはローカルでビルドし、CLIからWi-Fi経由で書き込むこともできます。
 
   ```bash
