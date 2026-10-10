@@ -96,13 +96,21 @@ uint8_t buf[1536];   // fits any non-fragmented UDP reply (EDNS answers can exce
 static const int DNS_CACHE_SIZE = 32;              // power of 2
 static const uint32_t DNS_TTL_MIN_MS = 5UL * 1000;
 static const uint32_t DNS_TTL_MAX_MS = 10UL * 60 * 1000;
+// Classic ESP32 DRAM cannot fit the roomier body: a cache bump once overflowed
+// dram0_0_seg by 13.8 KB and only surfaced because CI compiles both boards. C3/S3
+// boards have the headroom for 512 B answers (bigger CDN record sets cache).
+#ifdef CONFIG_IDF_TARGET_ESP32
+static const uint16_t DNS_BODY_MAX = 320;
+#else
+static const uint16_t DNS_BODY_MAX = 512;
+#endif
 struct DnsCacheEntry {
   bool     used;
   uint32_t expires;
   uint16_t bodyLen;                                // bytes of the cached response body
   uint8_t  key[128 + 4];                           // question section (<=128 B name + qtype/qclass)
   uint8_t  keyLen;
-  uint8_t  body[512];                              // response minus its 12-byte header
+  uint8_t  body[DNS_BODY_MAX];                     // response minus its 12-byte header
 };
 static DnsCacheEntry dnsCache[DNS_CACHE_SIZE];
 static uint32_t dnsCacheHits = 0, dnsCacheMiss = 0;   // surfaced in /stats.json
