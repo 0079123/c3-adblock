@@ -26,3 +26,4 @@ src/secrets.h
 # Python bytecode
 __pycache__/
 *.pyc
+src/page_gz.h

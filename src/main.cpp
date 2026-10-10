@@ -278,6 +278,11 @@ static uint32_t capQueries = 0;            // total queries recorded since the l
 static bool     capOverflow = false;       // set when a new group had nowhere to go
 static bool     capOn = false;
 static String   capFilter;                 // substring filter; empty records everything
+// Precise mode groups by FULL hostname instead of the root domain. Costs table
+// capacity (more distinct keys -> overflows sooner) and truncates names over 47
+// chars, but it is the only way to see WHICH subdomain carries an ad leak -- the
+// root grouping is exactly what hid v3.gdt.qq.com inside qq.com's 134 hits.
+static bool     capPrecise = false;
 
 // Capture settings live in RAM, so any reboot -- crash, brownout, watchdog, OTA -- silently
 // switched capture off and emptied the table, which looked like "the capture stopped on its
@@ -289,12 +294,15 @@ static void saveCaptureCfg() {
   // Explicit \n only: println() writes \r\n, and the \r used to end up INSIDE the
   // reloaded filter ("qq.com\r") -- which then matched nothing, so capture looked armed
   // but silently recorded zero queries after every reboot (field-observed).
-  f.print(capOn ? "1\n" : "0\n"); f.print(capFilter); f.print("\n"); f.close();
+  f.print(capOn ? "1\n" : "0\n"); f.print(capFilter); f.print("\n");
+  f.print(capPrecise ? "1\n" : "0\n"); f.close();
 }
 static void loadCaptureCfg() {
   File f = LittleFS.open("/cap.cfg", "r"); if (!f) return;
   String on = f.readStringUntil('\n'); on.trim();
   capFilter = f.readStringUntil('\n'); capFilter.trim();   // also heals old \r\n files
+  String pr = f.readStringUntil('\n'); pr.trim();          // absent in old files -> false
+  capPrecise = (pr == "1");
   f.close();
   capOn = (on == "1");
   if (capOn) Serial.println("[capture] resumed from saved settings after reboot");
@@ -319,9 +327,10 @@ static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool block
   if (!capOn) return;
   if (capFilter.length() && !strstr(domain, capFilter.c_str())) return;   // no String here: this runs per query
   capQueries++;
-  // Filtering means the user is drilling into one platform and wants exact names; an empty
-  // filter means they want the whole picture, so group by root to stay inside the table.
-  const char* key = capFilter.length() ? domain : domain + capRootOffset(domain);
+  // Filtering means the user is drilling into one platform and wants exact names; precise
+  // mode is the same idea with a toggle. Only an empty filter + non-precise groups by root
+  // to stay inside the table.
+  const char* key = (capPrecise || capFilter.length()) ? domain : domain + capRootOffset(domain);
   for (int i = 0; i < CAPTURE_SIZE; i++) {
     CapEntry& e = capBuf[i];
     if (e.used && strcmp(e.root, key) == 0) {
@@ -806,6 +815,7 @@ static String htmlEscape(const String& s) {
 }
 
 #include "page.h"   // dashboard HTML (PROGMEM) — see issue #6
+#include "page_gz.h" // same page, precompressed (generated from page.h at build time)
 
 static void handleStats() {
   uint32_t up = millis() / 1000;
@@ -1331,14 +1341,24 @@ void setup() {
                     "device on a network you don't fully control.");
 
   dnsServer.begin(DNS_PORT); upstreamCli.begin(0);
-  { const char* hdrs[] = { CSRF_HEADER }; web.collectHeaders(hdrs, 1); }  // needed for requireAuth()'s CSRF check
+  { const char* hdrs[] = { CSRF_HEADER, "Accept-Encoding" }; web.collectHeaders(hdrs, 2); }  // CSRF for requireAuth(); AE for the gzipped page
   // Pages must NOT call web.requestAuthentication() (requireAuthPage), because browsers
   // handle that prompt inconsistently -- some never show it, leaving users staring at a
   // blank/401 page. Being public keeps the dashboard always reachable; the password
   // question is moved into the page itself (see the login bar in src/page.h), which then
   // supplies credentials to the mutating endpoints. CSRF protection is unchanged there:
   // only state-changing endpoints require it, and they keep requireAuth().
-  web.on("/", []() { web.send_P(200, "text/html", PAGE); });
+  web.on("/", []() {
+    // Browsers always offer gzip -- serve the precompressed page and let the client
+    // decompress. Cheaper on both sides over a weak link than streaming 34 KB raw;
+    // non-gzip clients (curl, tools) still get the plaintext PROGMEM page.
+    if (PAGE_GZ_LEN && web.header("Accept-Encoding").indexOf("gzip") >= 0) {
+      web.sendHeader("Content-Encoding", "gzip");
+      web.send_P(200, "text/html", (const char*)PAGE_GZ, PAGE_GZ_LEN);
+      return;
+    }
+    web.send_P(200, "text/html", PAGE);
+  });
   web.on("/stats.json", handleStats);
   web.on("/ban", handleBan);
   web.on("/addblock", []() { if (!requireAuth()) return; addCustom(web.arg("d")); web.send(200, "text/plain", "ok"); });
@@ -1395,9 +1415,11 @@ void setup() {
       for (char ch : web.arg("f"))
         if ((uint8_t)ch >= 0x20) capFilter += ch;   // a control byte (stray \r) poisons indexOf matching
     }
+    if (web.hasArg("p")) capPrecise = web.arg("p") != "0";
     if (web.hasArg("on")) capOn = web.arg("on") != "0";
     saveCaptureCfg();
     web.send(200, "application/json", String("{\"on\":") + (capOn ? "true" : "false") +
+              ",\"precise\":" + (capPrecise ? "true" : "false") +
               ",\"filter\":\"" + jesc(capFilter) + "\"}");
   });
   // Distinct domains ordered by hit count, most-queried first: that ordering is what
@@ -1421,6 +1443,7 @@ void setup() {
     int n = capSorted(&capOrder);
     String j; j.reserve(256 + n * 160);
     j += "{\"on\":" + String(capOn ? "true" : "false") +
+               ",\"precise\":" + String(capPrecise ? "true" : "false") +
                ",\"queries\":" + String(capQueries) +
                ",\"distinct\":" + String(n) +
                ",\"overflow\":" + String(capOverflow ? "true" : "false") +

@@ -48,6 +48,7 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 <h2 id=hCap></h2>
 <div style="margin-bottom:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">
 <button id=btnCapToggle onclick=capToggle()></button>
+<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#8b949e;cursor:pointer"><input type=checkbox id=capPreciseChk onchange=capPreciseToggle() style=margin:0><span id=lblCapPrecise></span></label>
 <input id=capFilter placeholder="(留空=抓全部)" size=12 style="background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px">
 <button id=btnCapApply onclick=capApplyFilter()></button>
 <button id=btnCapClear onclick=capClear()></button>
@@ -82,6 +83,7 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  capQueries:'次查询',capDistinct:'个域名',capReboot:'设备曾重启，抓包记录已清空。原因: ',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录',
 
  capOn:'● 抓包中',capOff:'○ 未抓包',capEmpty:'暂无记录 —— 点「开始抓包」，然后在 App 里复现广告',
+ capPrecise:'精确主机名',
  capHint:'点「开始抓包」后复现漏网的广告（开始时会【自动清空过滤】，确保抓到全部请求，之后再按需过滤）；下方列表和 CSV 会显示设备收到的全部查询，以及每一条是否被拦截。过滤框可只记录含指定关键词的域名（如 iqiyi）。',
  
  forgetConfirm:'确定要清除已保存的 WiFi 并重启进入配网页面吗？',
@@ -110,6 +112,7 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  capQueries:'queries',capDistinct:'domains',capReboot:'device rebooted and the capture table was cleared. cause: ',capFiltering:'filtering: ',capOverflow:'domain table full; new domains dropped',
  
  capOn:'● capturing',capOff:'○ idle',capEmpty:'no entries yet -- press Start capture, then reproduce the ad in the app',
+ capPrecise:'Full hostname',
  capHint:'Press Start capture, then reproduce the ad (this CLEARS the filter so everything is captured);  The list and CSV show every query the device received and whether each was blocked. The filter box records only domains containing a keyword (e.g. iqiyi).',
  
  forgetConfirm:'Forget saved WiFi and reboot into the setup portal?',
@@ -134,7 +137,7 @@ function applyLang(l){lang=l;try{localStorage.setItem('c3lang',l)}catch(e){}
  remoteHint.textContent=t('remoteHint');lblLast.textContent=t('lblLast');
  hFw.textContent=t('hFw');btnFw.textContent=t('btnFw');fwHint.textContent=t('fwHint');
  hWifi.textContent=t('hWifi');btnForget.textContent=t('btnForget');
- hCap.textContent=t('hCap');btnCapToggle.textContent=capIsOn?t('btnCapStop'):t('btnCapStart');btnCapApply.textContent=t('btnCapApply');btnCapClear.textContent=t('btnCapClear');
+ hCap.textContent=t('hCap');btnCapToggle.textContent=capIsOn?t('btnCapStop'):t('btnCapStart');lblCapPrecise.textContent=t('capPrecise');btnCapApply.textContent=t('btnCapApply');btnCapClear.textContent=t('btnCapClear');
  btnCapCsv.textContent=t('btnCapCsv');capHint.textContent=t('capHint');
  thCapDomain.textContent=t('thCapDomain');thCapHits.textContent=t('thCapHits');thCapResult.textContent=t('thCapResult');thCapClient.textContent=t('thCapClient');
  credwarnT.textContent=t('credWarnTitle');credwarnB.textContent=t('credWarnBody');
@@ -245,8 +248,11 @@ function resetUpd(){if(!confirm(t('btnResetUpd')+'?'))return;api('/resetupdate')
 function fetchNow(){ustat.textContent=t('updFetching');api('/fetchnow').then(r=>r.text()).then(x=>{ustat.textContent=x;load()}).catch(function(){})}
 // ---- DNS capture ----
 var capIsOn=false;
+var capPrecise=false;
 function capRender(j){
   capIsOn=j.on;
+  capPrecise=j.precise===true;
+  capPreciseChk.checked=capPrecise;
   // queries = raw lookups seen; distinct = unique domains kept (the table row count).
   capState.textContent=(j.on?t('capOn'):t('capOff'))+'  '+
     (j.queries||0)+' '+t('capQueries')+' / '+(j.distinct||0)+' '+t('capDistinct')
@@ -275,6 +281,9 @@ function capBoot(r){
 }
 function capToggle(){
   api('/capture?on='+(capIsOn?'0':'1')).then(function(){capLoad()}).catch(function(){});
+}
+function capPreciseToggle(){
+  api('/capture?p='+(capPrecise?'0':'1')).then(function(){capLoad()}).catch(function(){});
 }
 function capApplyFilter(){
   api('/capture?f='+encodeURIComponent(capFilter.value.trim())).then(function(){capLoad()}).catch(function(){});
