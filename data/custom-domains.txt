@@ -205,3 +205,11 @@ qy.net
 # （md5("123456") 前缀 + 随机串）。wmz 无权威 NS、公网不解析（纯信标 TLD），
 # anti-AD/Hagezi 等各源均未收录。拦父域一网打尽全部随机子域，零破坏风险。
 wmz
+
+# ---- 2026-10-10 腾讯视频观看会话（精确模式 556 条查询）----
+# tdm 父域覆盖 receiver.tdm.qq.com / tdm.td.qq.com 等数据管理上报全家
+tdm.qq.com
+# 腾讯 InLong 数据采集通道
+trace.inlong.qq.com
+# 腾讯视频 P2P NAT 穿透（用户明确反对 P2P 上传）
+apd-vodp2pnat.teg.tencent-cloud.net

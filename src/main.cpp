@@ -62,6 +62,12 @@ static size_t expectedBlocklistBytes = 0;
 // cache layer and still look monotonic, so loop() reopens once more after 3 s.
 static uint32_t indexRebuildDue = 0;
 
+// Any write to LittleFS (config saves, custom list edits) can leave the blocklist
+// file's read path serving stale bytes -- the field-verified whole-table-forwarding
+// wedge. Config writes are rare, so after one, loop() reopens the blocklist file
+// (fresh handle = fresh read cache) and rebuilds the index. Cheap insurance.
+static bool blocklistRefreshDue = false;
+
 // Canary for runtime index health: the LAST index sample is by construction always in
 // the blob, so inFlash() over it must succeed forever. Field data shows this board can
 // start failing lookups minutes after boot while the file stays byte-perfect on flash
@@ -302,6 +308,7 @@ static void saveCaptureCfg() {
   // but silently recorded zero queries after every reboot (field-observed).
   f.print(capOn ? "1\n" : "0\n"); f.print(capFilter); f.print("\n");
   f.print(capPrecise ? "1\n" : "0\n"); f.close();
+  blocklistRefreshDue = true;
 }
 static void loadCaptureCfg() {
   File f = LittleFS.open("/cap.cfg", "r"); if (!f) return;
@@ -605,7 +612,7 @@ static void loadCustom() {
   }
   f.close();
 }
-static void saveCustom() { File f = LittleFS.open("/custom.txt", "w"); if (!f) return; for (int i = 0; i < numCustom; i++) f.println(customDom[i]); f.close(); }
+static void saveCustom() { File f = LittleFS.open("/custom.txt", "w"); if (!f) return; for (int i = 0; i < numCustom; i++) f.println(customDom[i]); f.close(); blocklistRefreshDue = true; }
 static bool addCustom(String d) {
   d.trim(); d.toLowerCase(); if (d.startsWith("www.")) d = d.substring(4);
   if (!d.length() || d.indexOf('.') < 0 || numCustom >= MAX_CUSTOM) return false;
@@ -631,6 +638,7 @@ static void saveBanned() {
   File f = LittleFS.open("/banned.txt", "w"); if (!f) return;
   for (int i = 0; i < numBanned; i++) { IPAddress ip(bannedIP[i]); f.println(ip.toString()); }
   f.close();
+  blocklistRefreshDue = true;
 }
 
 // ---------- client table ----------
@@ -1054,6 +1062,7 @@ static void loadUpdateCfg() {
 static void saveUpdateCfg() {
   File f = LittleFS.open("/update.cfg", "w"); if (!f) return;
   f.println(updateUrl); f.println(updateIntervalH); f.close();
+  blocklistRefreshDue = true;
 }
 static bool fetchBlocklist(String url) {
   url.trim(); if (!url.length()) { updateStatus = "no url set"; return false; }
@@ -1549,6 +1558,10 @@ void loop() {
   ArduinoOTA.handle();
   web.handleClient();
   bool busy = handleDns();
+  if (blocklistRefreshDue) {
+    blocklistRefreshDue = false;
+    reopenBlocklist();          // fresh handle after a LittleFS write -- see the flag's comment
+  }
   if (indexRebuildDue && (int32_t)(millis() - indexRebuildDue) >= 0) {
     indexRebuildDue = 0;
     reopenBlocklist();          // second pass once the swap's flush has settled
