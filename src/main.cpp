@@ -581,7 +581,11 @@ static bool isBlocked(const char* domain) {
     uint64_t h = fnv40(p, strlen(p));
     if (isBlockedHash(h)) return true;
     const char* dot = strchr(p, '.'); if (!dot) break;
-    const char* next = dot + 1; if (!strchr(next, '.')) break; p = next;
+    p = dot + 1;
+    // No early break at the TLD level: pseudo-TLD parents like the wmz beacon family
+    // are blocked AT the "wmz" label, so the walk must reach single-label ancestors.
+    // Bare "com"/"cn" can never be in the blob -- the build tool rejects dotless
+    // entries outside the hand-curated custom list.
   }
   return false;
 }

@@ -60,6 +60,22 @@ jobs:
           # ~70 KB larger for zero behavioral difference, so a silent regression to
           # --no-prune should be loud rather than just a bigger file.
           grep -q 'parent-redundant' build.log || { echo "pruning did not run"; exit 1; }
+          # The custom list carries dotless pseudo-TLD parents (wmz beacon family);
+          # verify the pipeline end-to-end: parent in, bare TLDs never in.
+          python3 - <<'PY'
+          import bisect
+          data = open('blocklist.bin','rb').read()
+          def fnv(s):
+              h = 0xcbf29ce484222325
+              for b in s.encode(): h = ((h ^ b) * 0x100000001b3) & ((1 << 64) - 1)
+              return h & ((1 << 40) - 1)
+          n = len(data) // 5
+          arr = sorted(int.from_bytes(data[i*5:i*5+5], 'little') for i in range(n))
+          def member(d): return bisect.bisect_left(arr, fnv(d)) != bisect.bisect_right(arr, fnv(d))
+          assert member('wmz'), 'wmz beacon parent missing from the blob'
+          assert not member('com') and not member('cn'), 'a bare TLD leaked into the blob'
+          print('wmz parent present, no bare TLDs')
+          PY
           echo "all sources present, pruning active"
       - name: Dump build log tail on failure
         if: failure()

@@ -79,6 +79,16 @@ ADWARS_HOSTS = 'https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts'
 # Maintainer's own list, kept in-repo (not gitignored) so CI and every local build pick it
 # up. Resolved relative to this script so the build works from any cwd. Add domains here
 # after confirming them from a device capture -- see the notes inside the file.
+# Real public suffixes are never accepted as single-label block entries -- a source
+# carrying a bare "com" would block the entire internet once the firmware walks to the
+# TLD level. Only pseudo-TLD parents from the hand-curated custom list may be dotless.
+REAL_TLDS = frozenset((
+    'com', 'cn', 'net', 'org', 'gov', 'edu', 'io', 'cc', 'xyz', 'top', 'vip',
+    'site', 'info', 'me', 'tv', 'app', 'dev', 'ai', 'cloud', 'shop', 'store',
+    'live', 'club', 'online', 'website', 'icu', 'pro', 'ltd', 'group', 'fun',
+    'wiki', 'zone', 'run', 'space', 'tech', 'link', 'blog', 'music', 'games',
+))
+
 CUSTOM_DOMAINS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'custom-domains.txt'))
 # Second curated list: flux-blocklist-adguard.txt, written from device captures with each
@@ -340,6 +350,11 @@ def main():
     domains, allow = set(), set()
     skipped = 0
     for src in sources:
+        # data/custom-domains.txt is hand-curated, so single-label entries (pseudo-TLD
+        # parents like the wmz DNS-beacon family) are accepted THERE ONLY; every other
+        # source keeps the dot requirement -- a bare TLD sneaking in from an external
+        # list would block the entire internet.
+        allow_single = os.path.abspath(src) == os.path.abspath(CUSTOM_DOMAINS)
         try:
             data = read_source(src)
         except Exception as e:
@@ -380,9 +395,11 @@ def main():
                 entries = parts if len(parts) == 1 else []
             for d in entries:
                 d = norm(d)
-                if '.' in d and ' ' not in d:
-                    domains.add(d)
-                    found.add(d)
+                if ' ' in d: continue
+                if '.' in d:
+                    domains.add(d); found.add(d)
+                elif allow_single and d and d not in REAL_TLDS:
+                    domains.add(d); found.add(d)      # pseudo-TLD parent (e.g. wmz)
         # A source that downloads fine but parses to almost nothing is the silent-shrink
         # failure mode CI has to catch (dead redirect, HTML error page, moved file).
         print(f'  {src}\n    -> {len(found):,} domains', file=sys.stderr)
