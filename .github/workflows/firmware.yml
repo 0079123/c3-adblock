@@ -71,7 +71,7 @@ jobs:
       - name: Collect the release assets
         run: |
           set -eu
-          trap 'echo "::error::Collect failed at line $LINENO"' ERR
+          trap 'echo "::error::Collect failed at line $LINENO"; ls .pio/build/c3/ 2>&1 | head -30 | while IFS= read -r l; do echo "::error::  $l"; done' ERR
           mkdir -p out
           # App images are named after the board so the OTA URL is unambiguous.
           cp .pio/build/c3/firmware.bin        out/firmware-c3.bin
