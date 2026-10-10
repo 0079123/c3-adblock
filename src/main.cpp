@@ -67,7 +67,13 @@ static uint32_t indexRebuildDue = 0;
 // start failing lookups minutes after boot while the file stays byte-perfect on flash
 // (reads through the lookup path go bad) -- the probe exposes that, and loop() rebuilds
 // instead of quietly forwarding every ad.
-static uint64_t indexCanary = 0;
+// Canary for runtime index health: probe permanent members of EVERY build (Hagezi
+// carries these unconditionally). The probe must be INDEPENDENT of the index and of
+// littlefs -- a canary derived from the index or the file would "hit" the stale bytes
+// the wedge serves and stay silent while every real lookup fails (field-verified).
+static const char* const CANARY_DOMAINS[] = {
+    "doubleclick.net", "googlesyndication.com", "tanx.com",
+};
 static uint32_t canaryNextAt = 0;
 static uint8_t canaryFails = 0;       // consecutive confident canary misses
 
@@ -937,7 +943,6 @@ static void reopenBlocklist(bool afterSwap = false) {
       // swap the whole table can still forward until the file settles. One delayed
       // rebuild settles it; loop() runs it and re-clears the hash cache.
       if (afterSwap) indexRebuildDue = millis() + 3000;
-      indexCanary = unpackHash(blIndex[INDEX_ENTRIES - 1]);
       canaryNextAt = millis() + 30000;
       return;
     }
@@ -1548,22 +1553,26 @@ void loop() {
     indexRebuildDue = 0;
     reopenBlocklist();          // second pass once the swap's flush has settled
   }
-  if (indexCanary && (int32_t)(millis() - canaryNextAt) >= 0) {
+  if ((int32_t)(millis() - canaryNextAt) >= 0) {
     canaryNextAt = millis() + 30000;
-    bool reliable = true;
-    // The canary hash is in the list by construction, so ANY failing probe -- confident
-    // miss OR unreliable read -- means matching is broken right now. The original logic
-    // ignored unreliable probes (matching inFlash's single-lookup rule), which is exactly
-    // how the field wedge escaped detection: after a swap every probe came back
-    // unreliable, the whole table silently forwarded, and nothing ever escalated.
-    const bool hit = inFlash(indexCanary, &reliable);
-    if (!hit || !reliable) {
+    // Canary v3: probe PERMANENT list members instead of an index-derived hash. The
+    // index itself can be built from stale bytes (the swap-time wedge) and then passes
+    // every self-referential check while real lookups forward -- probing fixed ad
+    // domains reads the wedged layer too, but the STALE content no longer contains
+    // anything guaranteeing a hit, so a miss actually means broken. Any hit = healthy.
+    bool anyHit = false, anyReliable = false;
+    for (auto* cdom : CANARY_DOMAINS) {
+      bool rel = true;
+      if (inFlash(fnv40(cdom, strlen(cdom)), &rel)) { anyHit = true; break; }
+      if (rel) anyReliable = true;
+    }
+    if (anyHit) {
       canaryFails++;
       // Rebuild first; if the read path stays wedged (littlefs caches keep serving the
       // previous blob), the restart below clears it -- guarded so a genuinely broken
       // flash cannot trap the device in a reboot loop.
-      Serial.printf("[blocklist] canary %s x%d -- index compromised, rebuilding\n",
-                    reliable ? "miss" : "unreliable-read", canaryFails);
+      Serial.printf("[blocklist] canary %s x%d -- matching broken, rebuilding\n",
+                    anyReliable ? "miss" : "unreliable", canaryFails);
       if (canaryFails >= 3) {
         prefs.begin("blk", false);
         uint8_t restarts = prefs.getUChar("restarts", 0);
