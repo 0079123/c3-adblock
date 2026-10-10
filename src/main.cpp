@@ -102,7 +102,7 @@ struct DnsCacheEntry {
   uint16_t bodyLen;                                // bytes of the cached response body
   uint8_t  key[128 + 4];                           // question section (<=128 B name + qtype/qclass)
   uint8_t  keyLen;
-  uint8_t  body[320];                              // response minus its 12-byte header
+  uint8_t  body[512];                              // response minus its 12-byte header
 };
 static DnsCacheEntry dnsCache[DNS_CACHE_SIZE];
 static uint32_t dnsCacheHits = 0, dnsCacheMiss = 0;   // surfaced in /stats.json
@@ -127,33 +127,42 @@ static int dnsCacheGet(const uint8_t* key, size_t keyLen) {
 static void dnsCachePut(const uint8_t* key, size_t keyLen, int n) {
   if (keyLen == 0 || keyLen > sizeof(dnsCache[0].key)) return;
   if (n <= 12 || n > 12 + (int)sizeof(dnsCache[0].body)) return;
-  // Only cache ordinary successes: skip truncated replies (TC) and error rcodes, which may
-  // be transient or need retrying against another resolver.
+  // Cache ordinary successes and NXDOMAIN. NXDOMAIN negative-caching matters because
+  // Windows alone burns a burst of guaranteed-miss probes (UPnP, WS-Discovery) and each
+  // uncached one pays the up-to-1 s blocking forward; 30 s is well inside client retry
+  // windows. Other rcodes are treated as transient and skipped.
   const uint8_t flags = buf[3];
   if (flags & 0x02) return;                        // TC: truncated, retry over TCP wasn't done
-  if ((flags & 0x0F) != 0) return;                 // rcode != NOERROR
-  if (buf[6] || buf[7]) { /* ancount>0: normal */ } else if (buf[8] || buf[9]) { return; }
+  const uint8_t rcode = flags & 0x0F;
+  uint32_t ttl;
+  if (rcode == 3) {
+    ttl = 30000;                                   // fixed negative TTL
+  } else if (rcode != 0) {
+    return;                                        // SERVFAIL etc: retry against upstream soon
+  } else {
+    if (buf[6] || buf[7]) { /* ancount>0: normal */ } else if (buf[8] || buf[9]) { return; }
 
-  // Shortest TTL across the answer records, so we never outlive the upstream's own bound.
-  uint32_t ttl = DNS_TTL_MAX_MS;
-  int i = 12 + keyLen;                             // skip header + question
-  const int ancount = (buf[6] << 8) | buf[7];
-  for (int a = 0; a < ancount && i + 12 <= n; a++) {
-    // Walk (and skip) the owner name. A compression pointer occupies exactly 2 bytes with
-    // no terminator; only the inline-label form ends with a NUL byte. Consuming a terminator
-    // after a pointer would shift every field by one and mis-read the type/TTL -- which is
-    // exactly what an earlier version did.
-    if (buf[i] & 0xC0) i += 2;
-    else { while (i < n && buf[i] != 0) i += buf[i] + 1; i += 1; }   // +1 for the terminator
-    if (i + 10 > n) break;
-    const uint16_t rtype  = (buf[i] << 8) | buf[i + 1];
-    const uint16_t rclass = (buf[i + 2] << 8) | buf[i + 3];
-    const uint32_t rttl   = ((uint32_t)buf[i + 4] << 24) | ((uint32_t)buf[i + 5] << 16) |
-                            ((uint32_t)buf[i + 6] << 8) | buf[i + 7];
-    const uint16_t rdlen  = (buf[i + 8] << 8) | buf[i + 9];
-    i += 10 + rdlen;
-    if (rtype == 1 && rclass == 1) { const uint32_t ms = rttl * 1000UL;
-      if (ms < ttl) ttl = ms; }
+    // Shortest TTL across the answer records, so we never outlive the upstream's own bound.
+    ttl = DNS_TTL_MAX_MS;
+    int i = 12 + keyLen;                           // skip header + question
+    const int ancount = (buf[6] << 8) | buf[7];
+    for (int a = 0; a < ancount && i + 12 <= n; a++) {
+      // Walk (and skip) the owner name. A compression pointer occupies exactly 2 bytes with
+      // no terminator; only the inline-label form ends with a NUL byte. Consuming a terminator
+      // after a pointer would shift every field by one and mis-read the type/TTL -- which is
+      // exactly what an earlier version did.
+      if (buf[i] & 0xC0) i += 2;
+      else { while (i < n && buf[i] != 0) i += buf[i] + 1; i += 1; }   // +1 for the terminator
+      if (i + 10 > n) break;
+      const uint16_t rtype  = (buf[i] << 8) | buf[i + 1];
+      const uint16_t rclass = (buf[i + 2] << 8) | buf[i + 3];
+      const uint32_t rttl   = ((uint32_t)buf[i + 4] << 24) | ((uint32_t)buf[i + 5] << 16) |
+                              ((uint32_t)buf[i + 6] << 8) | buf[i + 7];
+      const uint16_t rdlen  = (buf[i + 8] << 8) | buf[i + 9];
+      i += 10 + rdlen;
+      if (rtype == 1 && rclass == 1) { const uint32_t ms = rttl * 1000UL;
+        if (ms < ttl) ttl = ms; }
+    }
   }
   if (ttl < DNS_TTL_MIN_MS) ttl = DNS_TTL_MIN_MS;
   if (ttl > DNS_TTL_MAX_MS) ttl = DNS_TTL_MAX_MS;
@@ -269,12 +278,15 @@ static String   capFilter;                 // substring filter; empty records ev
 // still RAM-only by design; the reset reason below makes the lost data explainable.
 static void saveCaptureCfg() {
   File f = LittleFS.open("/cap.cfg", "w"); if (!f) return;
-  f.println(capOn ? "1" : "0"); f.println(capFilter); f.close();
+  // Explicit \n only: println() writes \r\n, and the \r used to end up INSIDE the
+  // reloaded filter ("qq.com\r") -- which then matched nothing, so capture looked armed
+  // but silently recorded zero queries after every reboot (field-observed).
+  f.print(capOn ? "1\n" : "0\n"); f.print(capFilter); f.print("\n"); f.close();
 }
 static void loadCaptureCfg() {
   File f = LittleFS.open("/cap.cfg", "r"); if (!f) return;
   String on = f.readStringUntil('\n'); on.trim();
-  capFilter = f.readStringUntil('\n');
+  capFilter = f.readStringUntil('\n'); capFilter.trim();   // also heals old \r\n files
   f.close();
   capOn = (on == "1");
   if (capOn) Serial.println("[capture] resumed from saved settings after reboot");
@@ -297,7 +309,7 @@ static const char* resetReason() {
 
 static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool blocked) {
   if (!capOn) return;
-  if (capFilter.length() && String(domain).indexOf(capFilter) < 0) return;
+  if (capFilter.length() && !strstr(domain, capFilter.c_str())) return;   // no String here: this runs per query
   capQueries++;
   // Filtering means the user is drilling into one platform and wants exact names; an empty
   // filter means they want the whole picture, so group by root to stay inside the table.
@@ -645,7 +657,7 @@ static bool handleDns() {
     char domain[256]; uint16_t qtype = 0; int qend = qlen;
     size_t dl = parseQuery(buf, qlen, domain, &qtype, &qend);
     Dev* c = getClient((uint32_t)cip);
-    bool ban = c && c->banned;
+    bool ban = c ? c->banned : isBannedIP((uint32_t)cip);   // slots can be full: don't lose the ban
     bool blocked = ban || (blockingOn && dl && numHashes && isBlocked(domain));
     // Record before acting, so the capture shows what arrived and how it was classified.
     if (dl) capRecord(domain, (uint32_t)cip, (uint8_t)qtype, blocked);
@@ -673,7 +685,15 @@ static bool handleDns() {
 
 // ---------- web ----------
 static String macStr(const uint8_t* m) { char s[18]; snprintf(s, sizeof(s), "%02x:%02x:%02x:%02x:%02x:%02x", m[0],m[1],m[2],m[3],m[4],m[5]); return String(s); }
-static String jesc(const String& s) { String o; for (char ch : s) { if (ch == '"' || ch == '\\') o += '\\'; o += ch; } return o; }
+static String jesc(const String& s) {
+  String o; o.reserve(s.length() + 8);
+  for (char ch : s) {
+    if ((uint8_t)ch < 0x20) { o += ' '; continue; }   // a raw control byte breaks the JSON frame
+    if (ch == '"' || ch == '\\') o += '\\';
+    o += ch;
+  }
+  return o;
+}
 // HTML text/attribute escaping for the setup portal. jesc() covers JSON (stats
 // endpoint); the portal builds HTML, and its inputs — a scanned SSID, the
 // submitted WiFi name — are attacker-controllable during provisioning (the
@@ -700,9 +720,10 @@ static String htmlEscape(const String& s) {
 static void handleStats() {
   uint32_t up = millis() / 1000;
   char ut[24]; snprintf(ut, sizeof(ut), "%lud %luh %lum", up/86400, (up%86400)/3600, (up%3600)/60);
-  String j = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"blocked\":" + totalBlocked + ",\"allowed\":" + totalAllowed +
+  String j; j.reserve(1024);                        // this runs on every dashboard poll: no realloc ratchet
+  j = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"blocked\":" + totalBlocked + ",\"allowed\":" + totalAllowed +
              ",\"domains\":" + numHashes + ",\"rssi\":" + WiFi.RSSI() + ",\"temp\":" + String(temperatureRead(), 1) +
-             ",\"heap\":" + ESP.getFreeHeap() + ",\"uptime\":\"" + ut + "\"" +
+             ",\"heap\":" + ESP.getFreeHeap() + ",\"heapmin\":" + ESP.getMinFreeHeap() + ",\"uptime\":\"" + ut + "\"" +
              ",\"upurl\":\"" + jesc(updateUrl) + "\",\"upiv\":" + updateIntervalH + ",\"upstat\":\"" + jesc(updateStatus) + "\""
              + ",\"upcustom\":" + (updateUrlCustom ? "true" : "false")
              + ",\"resetreason\":\"" + jesc(String(resetReason())) + "\""
@@ -929,19 +950,20 @@ static bool fetchBlocklist(String url) {
     if (avail) {
       int n = stream->readBytes(b, avail > sizeof(b) ? sizeof(b) : avail);
       if (n > 0) { f.write(b, n); total += n; idle = millis(); }
-      // Every ~8 KB written, service pending DNS queries and HTTP requests once. Small
-      // enough that the socket stays busy, frequent enough that clients aren't stalled.
+      // Every ~8 KB written, service pending DNS queries once. Small enough that the
+      // socket stays busy, frequent enough that clients aren't stalled. NOTE: only DNS
+      // is serviced, never web.handleClient() -- this runs inside the /fetchnow handler
+      // and WebServer is not re-entrant; nested requests would clobber its connection
+      // state. Dashboard requests made during a fetch wait in the backlog instead.
       if ((total - yielded) >= 8192) {
         yielded = total;
         handleDns();
-        web.handleClient();
         delay(1);
       }
     } else {
-      // No data ready: instead of a bare delay(2), process DNS/web first so an idle wait
+      // No data ready: instead of a bare delay(2), process DNS first so an idle wait
       // does not also become a stall.
       handleDns();
-      web.handleClient();
       if (millis() - idle > fetchIdleMs) break;
       delay(2);
     }
@@ -1278,7 +1300,11 @@ void setup() {
     // leftover filter silently narrows the log, so the next capture looks like "this app
     // only asks for these domains" when it actually asks for far more. Default = record all.
     if (web.hasArg("on") && web.arg("on") != "0" && !web.hasArg("f")) capFilter = "";
-    if (web.hasArg("f")) capFilter = web.arg("f");
+    if (web.hasArg("f")) {
+      capFilter = "";
+      for (char ch : web.arg("f"))
+        if ((uint8_t)ch >= 0x20) capFilter += ch;   // a control byte (stray \r) poisons indexOf matching
+    }
     if (web.hasArg("on")) capOn = web.arg("on") != "0";
     saveCaptureCfg();
     web.send(200, "application/json", String("{\"on\":") + (capOn ? "true" : "false") +
@@ -1303,7 +1329,8 @@ void setup() {
   const int *capOrder = nullptr;
   web.on("/capture.json", [&capSorted, &capOrder]() {
     int n = capSorted(&capOrder);
-    String j = "{\"on\":" + String(capOn ? "true" : "false") +
+    String j; j.reserve(256 + n * 160);
+    j += "{\"on\":" + String(capOn ? "true" : "false") +
                ",\"queries\":" + String(capQueries) +
                ",\"distinct\":" + String(n) +
                ",\"overflow\":" + String(capOverflow ? "true" : "false") +
