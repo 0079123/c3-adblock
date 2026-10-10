@@ -323,8 +323,35 @@ static const char* resetReason() {
   }
 }
 
+// ---------- raw query log (ring) ----------
+// The grouped table answers "which domains", but ad-hunting also needs "WHEN, and in
+// what order" -- a splash ad correlates with a burst of lookups right now. This is a
+// fixed ring of the last N queries, unfiltered, newest shown first. DNS-level capture
+// only ever has domains: HTTP request paths flow client->router->internet and never
+// touch this device, so a path column is physically impossible here.
+struct RecentQuery {
+  uint32_t ms;
+  char     d[48];
+  uint32_t ip;
+  bool     blocked;
+  uint8_t  qtype;
+};
+static const int RECENT_LOG_SIZE = 48;
+static RecentQuery recentLog[RECENT_LOG_SIZE];
+static int      recentHead = 0;      // next write slot
+static uint16_t recentCount = 0;
+
+static void recentLogAdd(const char* domain, uint32_t ip, uint8_t qtype, bool blocked) {
+  RecentQuery& r = recentLog[recentHead];
+  r.ms = millis(); r.ip = ip; r.blocked = blocked; r.qtype = qtype;
+  strncpy(r.d, domain, sizeof(r.d) - 1); r.d[sizeof(r.d) - 1] = 0;
+  recentHead = (recentHead + 1) % RECENT_LOG_SIZE;
+  if (recentCount < RECENT_LOG_SIZE) recentCount++;
+}
+
 static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool blocked) {
   if (!capOn) return;
+  recentLogAdd(domain, ip, qtype, blocked);   // raw log: EVERY query, unfiltered by design
   if (capFilter.length() && !strstr(domain, capFilter.c_str())) return;   // no String here: this runs per query
   capQueries++;
   // Filtering means the user is drilling into one platform and wants exact names; precise
@@ -355,7 +382,19 @@ static void capRecord(const char* domain, uint32_t ip, uint8_t qtype, bool block
     e.hits = 1; e.blockedHits = blocked ? 1 : 0; e.firstMs = e.lastMs = millis();
     return;
   }
-  capOverflow = true;   // table full: further distinct domains are dropped; shown in the UI
+  // Table full: evict the least-recently-updated entry instead of dropping the newcomer.
+  // Dropping meant a long session filled the table once and then EVERY later domain --
+  // including the ad leak being hunted -- was invisible. Hot domains keep refreshing
+  // lastMs, so they survive; stale ones make room. capOverflow now means "recycling".
+  int victim = 0;
+  for (int i = 1; i < CAPTURE_SIZE; i++)
+    if ((int32_t)(capBuf[i].lastMs - capBuf[victim].lastMs) < 0) victim = i;
+  CapEntry& e = capBuf[victim];
+  capOverflow = true;
+  strncpy(e.root, key, CAPTURE_ROOT_MAX - 1);      e.root[CAPTURE_ROOT_MAX - 1] = 0;
+  strncpy(e.example, domain, CAPTURE_DOMAIN_MAX - 1); e.example[CAPTURE_DOMAIN_MAX - 1] = 0;
+  e.ip = ip; e.qtype = qtype;
+  e.hits = 1; e.blockedHits = blocked ? 1 : 0; e.firstMs = e.lastMs = millis();
 }
 
 // remote blocklist auto-update
@@ -1405,6 +1444,7 @@ void setup() {
     if (web.hasArg("clear")) {
       capQueries = 0; capOn = false; capOverflow = false;
       memset(capBuf, 0, sizeof(capBuf));
+      recentHead = 0; recentCount = 0;
     }
     // Starting a capture resets the filter unless one was given in the same request: a
     // leftover filter silently narrows the log, so the next capture looks like "this app
@@ -1441,7 +1481,7 @@ void setup() {
   const int *capOrder = nullptr;
   web.on("/capture.json", [&capSorted, &capOrder]() {
     int n = capSorted(&capOrder);
-    String j; j.reserve(256 + n * 160);
+    String j; j.reserve(256 + n * 160 + recentCount * 110);
     j += "{\"on\":" + String(capOn ? "true" : "false") +
                ",\"precise\":" + String(capPrecise ? "true" : "false") +
                ",\"queries\":" + String(capQueries) +
@@ -1458,6 +1498,16 @@ void setup() {
            ",\"ip\":\"" + ip.toString() + "\",\"q\":" + String(e.qtype) +
            ",\"b\":" + String(e.blockedHits == e.hits ? "true" : "false") +
            ",\"first\":" + String(e.firstMs) + ",\"last\":" + String(e.lastMs) + "}";
+    }
+    j += "],\"recent\":[";
+    for (int k = 0; k < recentCount; k++) {
+      int idx = (recentHead - 1 - k + RECENT_LOG_SIZE) % RECENT_LOG_SIZE;   // newest first
+      const RecentQuery& r = recentLog[idx];
+      if (k) j += ",";
+      IPAddress rip(r.ip);
+      j += "{\"t\":" + String(r.ms) + ",\"d\":\"" + jesc(String(r.d)) +
+           "\",\"ip\":\"" + rip.toString() + "\",\"b\":" + String(r.blocked ? "true" : "false") +
+           ",\"q\":" + String(r.qtype) + "}";
     }
     j += "]}";
     web.send(200, "application/json", j);

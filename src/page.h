@@ -57,6 +57,8 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 <div id=capHint style="color:#8b949e;font-size:12px;margin-bottom:8px"></div>
 <div id=capBoot style="display:none;color:#f0883e;font-size:12px;margin-bottom:6px"></div>
 <table id=capTbl style="display:none"><thead><tr><th id=thCapDomain></th><th id=thCapHits></th><th id=thCapResult></th><th id=thCapClient></th></tr></thead><tbody></tbody></table>
+<h3 id=capLogH style="font-size:13px;color:#8b949e;margin:16px 0 4px"></h3>
+<div id=capLog style="display:none;font-size:12px;line-height:1.6;color:#c9d1d9;white-space:pre-wrap;max-height:300px;overflow-y:auto;background:#0d1117;border:1px solid #30363d;border-radius:5px;padding:6px"></div>
 <h2 id=hWifi></h2>
 <div style=margin-bottom:18px><button id=btnForget onclick="forgetWifi()"></button></div>
 </div><script>
@@ -80,7 +82,8 @@ temp:'芯片温度',freeRam:'剩余 RAM',uptime:'运行时长',
  hCap:'抓包 — DNS 查询记录 (CAPTURE)',
  btnCapStart:'开始抓包',btnCapStop:'停止抓包',btnCapApply:'应用过滤',btnCapClear:'清空',btnCapCsv:'下载 CSV',
  thCapDomain:'域名',thCapHits:'次数',thCapResult:'结果',thCapClient:'客户端',
- capQueries:'次查询',capDistinct:'个域名',capReboot:'设备曾重启，抓包记录已清空。原因: ',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，后续新域名未记录',
+ capQueries:'次查询',capDistinct:'个域名',capReboot:'设备曾重启，抓包记录已清空。原因: ',capFiltering:'过滤中: ',capOverflow:'域名数已达上限，最旧的条目开始被轮替',
+ capLogH:'实时查询日志（最近 48 条，新→旧）',
 
  capOn:'● 抓包中',capOff:'○ 未抓包',capEmpty:'暂无记录 —— 点「开始抓包」，然后在 App 里复现广告',
  capPrecise:'精确主机名',
@@ -109,7 +112,8 @@ temp:'Temp',freeRam:'Free RAM',uptime:'Uptime',
  hCap:'CAPTURE -- DNS query log',
  btnCapStart:'Start capture',btnCapStop:'Stop capture',btnCapApply:'Apply filter',btnCapClear:'Clear',btnCapCsv:'Download CSV',
  thCapDomain:'Domain',thCapHits:'Hits',thCapResult:'Result',thCapClient:'Client',
- capQueries:'queries',capDistinct:'domains',capReboot:'device rebooted and the capture table was cleared. cause: ',capFiltering:'filtering: ',capOverflow:'domain table full; new domains dropped',
+ capQueries:'queries',capDistinct:'domains',capReboot:'device rebooted and the capture table was cleared. cause: ',capFiltering:'filtering: ',capOverflow:'domain table full; oldest entries are being recycled',
+ capLogH:'Query log (last 48, newest first)',
  
  capOn:'● capturing',capOff:'○ idle',capEmpty:'no entries yet -- press Start capture, then reproduce the ad in the app',
  capPrecise:'Full hostname',
@@ -137,7 +141,7 @@ function applyLang(l){lang=l;try{localStorage.setItem('c3lang',l)}catch(e){}
  remoteHint.textContent=t('remoteHint');lblLast.textContent=t('lblLast');
  hFw.textContent=t('hFw');btnFw.textContent=t('btnFw');fwHint.textContent=t('fwHint');
  hWifi.textContent=t('hWifi');btnForget.textContent=t('btnForget');
- hCap.textContent=t('hCap');btnCapToggle.textContent=capIsOn?t('btnCapStop'):t('btnCapStart');lblCapPrecise.textContent=t('capPrecise');btnCapApply.textContent=t('btnCapApply');btnCapClear.textContent=t('btnCapClear');
+ hCap.textContent=t('hCap');btnCapToggle.textContent=capIsOn?t('btnCapStop'):t('btnCapStart');lblCapPrecise.textContent=t('capPrecise');capLogH.textContent=t('capLogH');btnCapApply.textContent=t('btnCapApply');btnCapClear.textContent=t('btnCapClear');
  btnCapCsv.textContent=t('btnCapCsv');capHint.textContent=t('capHint');
  thCapDomain.textContent=t('thCapDomain');thCapHits.textContent=t('thCapHits');thCapResult.textContent=t('thCapResult');thCapClient.textContent=t('thCapClient');
  credwarnT.textContent=t('credWarnTitle');credwarnB.textContent=t('credWarnBody');
@@ -267,6 +271,15 @@ function capRender(j){
       '<td style="color:'+(e.bh?'#f85149':'#3fb950')+'">'+
       (e.bh?('拦'+fmt(e.bh)+(e.ah?' / 放'+fmt(e.ah):'')):('放'+fmt(e.ah||e.hits)))+'</td><td style="color:#8b949e">'+esc(e.ip)+'</td></tr>';
   }).join('') : ('<tr><td colspan=4 style=color:#8b949e>'+t('capEmpty')+'</td></tr>');
+  var lg = j.recent || [];
+  capLog.style.display = lg.length ? 'block' : 'none';
+  capLogH.style.display = lg.length ? 'block' : 'none';
+  var lines = [];
+  for (var k = 0; k < lg.length; k++) {
+    var r = lg[k];
+    lines.push('[' + (r.t/1000).toFixed(1) + 's] ' + (r.b ? '✗拦 ' : '✓放 ') + r.d + '   (' + r.ip + ')');
+  }
+  capLog.textContent = lines.join('\n');
 }
 // capRender paints btnCapToggle's label, so a failed first load must retry: the tick
 // below only runs once capIsOn is set, and only a successful render sets it.
