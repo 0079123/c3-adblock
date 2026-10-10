@@ -1547,18 +1547,19 @@ void loop() {
   if (indexCanary && (int32_t)(millis() - canaryNextAt) >= 0) {
     canaryNextAt = millis() + 30000;
     bool reliable = true;
-    // The canary hash is in the list by construction, so a confident miss means every
-    // lookup is failing right now (field-verified failure mode: ad domains silently
-    // forward for whole sessions). Rebuild immediately; unreliable reads are ignored,
-    // matching inFlash's own rule.
-    if (!inFlash(indexCanary, &reliable) && reliable) {
+    // The canary hash is in the list by construction, so ANY failing probe -- confident
+    // miss OR unreliable read -- means matching is broken right now. The original logic
+    // ignored unreliable probes (matching inFlash's single-lookup rule), which is exactly
+    // how the field wedge escaped detection: after a swap every probe came back
+    // unreliable, the whole table silently forwarded, and nothing ever escalated.
+    const bool hit = inFlash(indexCanary, &reliable);
+    if (!hit || !reliable) {
       canaryFails++;
-      // Field round three: the wedge survives rebuilds because littlefs keeps serving
-      // the previous blob's bytes through its caches -- only a fresh mount (reboot)
-      // clears it. Restart after the third consecutive failure, with a persisted
-      // guard so a genuinely broken flash cannot trap the device in a reboot loop:
-      // three restarts without 10 healthy minutes stops the cycle.
-      Serial.printf("[blocklist] canary failed x%d -- index compromised\n", canaryFails);
+      // Rebuild first; if the read path stays wedged (littlefs caches keep serving the
+      // previous blob), the restart below clears it -- guarded so a genuinely broken
+      // flash cannot trap the device in a reboot loop.
+      Serial.printf("[blocklist] canary %s x%d -- index compromised, rebuilding\n",
+                    reliable ? "miss" : "unreliable-read", canaryFails);
       if (canaryFails >= 3) {
         prefs.begin("blk", false);
         uint8_t restarts = prefs.getUChar("restarts", 0);
@@ -1575,9 +1576,10 @@ void loop() {
       } else {
         reopenBlocklist(true);
       }
-    } else if (canaryFails) {
-      canaryFails--;                       // healthy probe: decay toward re-arming restarts
-      if (millis() > 600000 && canaryFails == 0) {   // 10 healthy minutes: clear the guard
+    } else {
+      // Healthy probe: decay toward re-arming restarts; 10 healthy minutes clears the guard.
+      if (canaryFails) canaryFails--;
+      if (millis() > 600000 && canaryFails == 0) {
         prefs.begin("blk", false); prefs.putUChar("restarts", 0); prefs.end();
       }
     }
