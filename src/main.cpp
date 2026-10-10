@@ -645,9 +645,88 @@ static int forwardUpstream(int qlen, int qend) {
   }
   return 0;
 }
+// ---------- async upstream forwarding ----------
+// A cache miss used to forward synchronously and park this loop for up to a second;
+// bursts of client queries queued behind it and their replies were dropped (field
+// observed, and the cause of the dashboard stalling during DNS-heavy moments). A miss
+// now goes into a small pending table and pollUpstream() delivers the reply on a later
+// loop pass -- the client's own retry window is >= 1 s, which is plenty. The blocking
+// forwardUpstream() above stays as the fallback for when the table is full.
+static const int PENDING_Q = 6;
+static const uint32_t PENDING_TIMEOUT_MS = 1000;
+struct PendingQ {
+  bool     used;
+  uint16_t txidUp;                  // txid we sent upstream with
+  uint16_t clientTxid;              // txid the client sent, restored on the way back
+  uint32_t clientIp;
+  uint16_t clientPort;
+  uint8_t  q[128 + 4];              // question section: reply matching + cache key
+  uint8_t  qLen;
+  uint32_t sentAt;
+};
+static PendingQ pendingQ[PENDING_Q];
+
+static void purgePending() {
+  const uint32_t now = millis();
+  for (int i = 0; i < PENDING_Q; i++)
+    if (pendingQ[i].used && now - pendingQ[i].sentAt > PENDING_TIMEOUT_MS) pendingQ[i].used = false;
+}
+
+// Deliver upstream replies to the clients that asked for them. Matching is by our own
+// txid plus the full question section, so a late reply for an already-purged query is
+// dropped instead of being relayed to the next client (issue #10's off-by-one relay).
+static int pollUpstream() {
+  int served = 0;
+  for (;;) {
+    int sz = upstreamCli.parsePacket();
+    if (sz <= 0) break;
+    IPAddress rip = upstreamCli.remoteIP(); uint16_t rport = upstreamCli.remotePort();
+    int n = upstreamCli.read(buf, sizeof(buf));
+    upstreamCli.flush();                                 // oversized datagram can't strand rx_buffer
+    if (n < 12 || rip != UPSTREAM || rport != UPSTREAM_PORT) continue;
+    const uint16_t wid = (buf[0] << 8) | buf[1];
+    PendingQ* p = nullptr;
+    for (int i = 0; i < PENDING_Q && !p; i++)
+      if (pendingQ[i].used && pendingQ[i].txidUp == wid &&
+          (int)(12 + pendingQ[i].qLen) <= n &&
+          memcmp(buf + 12, pendingQ[i].q, pendingQ[i].qLen) == 0) p = &pendingQ[i];
+    if (!p) continue;
+    dnsCachePut(p->q, p->qLen, n);                 // before the txid rewrite: body unaffected
+    buf[0] = p->clientTxid >> 8; buf[1] = p->clientTxid & 0xFF;
+    dnsServer.beginPacket(p->clientIp, p->clientPort); dnsServer.write(buf, n); dnsServer.endPacket();
+    p->used = false; served++;
+  }
+  return served;
+}
+
+// Send a cache miss upstream without waiting for the answer: record it in the table and
+// let pollUpstream() deliver the reply later. Returns false when the table is full or the
+// random txid collides with an entry still in flight -- the caller then takes the
+// synchronous path so the client never loses the query.
+static bool sendUpstreamAsync(int qlen, int qend, uint32_t clientIp, uint16_t clientPort) {
+  PendingQ* p = nullptr;
+  for (int i = 0; i < PENDING_Q && !p; i++) if (!pendingQ[i].used) p = &pendingQ[i];
+  if (!p) return false;
+  int ql = qend - 12;
+  if (ql <= 0 || ql > (int)sizeof(p->q) || qend > qlen) return false;
+  const uint16_t wid = (uint16_t)esp_random();
+  for (int i = 0; i < PENDING_Q; i++)
+    if (pendingQ[i].used && pendingQ[i].txidUp == wid) return false;   // rare: sync fallback
+  p->used = true; p->txidUp = wid;
+  p->clientTxid = (buf[0] << 8) | buf[1];
+  p->clientIp = clientIp; p->clientPort = clientPort;
+  p->qLen = (uint8_t)ql; memcpy(p->q, buf + 12, ql);
+  p->sentAt = millis();
+  buf[0] = wid >> 8; buf[1] = wid & 0xFF;
+  upstreamCli.beginPacket(UPSTREAM, UPSTREAM_PORT); upstreamCli.write(buf, qlen); upstreamCli.endPacket();
+  return true;
+}
 // Drain a whole RX burst per call (capped, so web/OTA still get a turn) instead of
-// one packet per loop iteration. Returns true if any query was handled this call.
+// one packet per loop iteration. Also delivers upstream replies for earlier async
+// misses. Returns true if any DNS work happened this call.
 static bool handleDns() {
+  purgePending();                     // free expired misses before serving anything new
+  bool busy = pollUpstream() > 0;
   bool did = false;
   for (int budget = 0; budget < 16; budget++) {
     int sz = dnsServer.parsePacket(); if (sz <= 0) break;
@@ -665,22 +744,25 @@ static bool handleDns() {
     if (blocked) { rlen = buildBlocked(qend, qtype); totalBlocked++; if (c) c->blocked++; }
     else {
       // Cache key = the question section (qname+qtype+qclass), so A and AAAA differ. A
-      // hit answers without touching the network -- important because forwarding blocks
-      // this loop for up to 1 s.
+      // hit answers without touching the network. A miss goes upstream ASYNC -- the
+      // reply is delivered by pollUpstream() on a later pass -- so this loop no longer
+      // parks for up to 1 s behind a slow upstream.
       const uint8_t* qkey = buf + 12;
       const size_t qkeyLen = (qend > 12) ? (size_t)(qend - 12) : 0;
       const uint8_t cid0 = buf[0], cid1 = buf[1];
       rlen = dnsCacheGet(qkey, qkeyLen);
       if (rlen > 0) { buf[0] = cid0; buf[1] = cid1; }     // restore the client's txid
-      else {
-        rlen = forwardUpstream(qlen, qend);
+      else if (sendUpstreamAsync(qlen, qend, (uint32_t)cip, cport)) {
+        rlen = 0;                                          // reply lands via pollUpstream()
+      } else {
+        rlen = forwardUpstream(qlen, qend);                // table full: blocking fallback
         if (rlen > 0) { dnsCachePut(qkey, qkeyLen, rlen); }
       }
       totalAllowed++; if (c) c->allowed++;
     }
     if (rlen > 0) { dnsServer.beginPacket(cip, cport); dnsServer.write(buf, rlen); dnsServer.endPacket(); }
   }
-  return did;
+  return busy || did;
 }
 
 // ---------- web ----------
