@@ -1584,9 +1584,14 @@ void loop() {
       // Rebuild first; if the read path stays wedged (littlefs caches keep serving the
       // previous blob), the restart below clears it -- guarded so a genuinely broken
       // flash cannot trap the device in a reboot loop.
-      Serial.printf("[blocklist] canary %s x%d -- matching broken, rebuilding\n",
+      Serial.printf("[blocklist] canary %s x%d -- matching broken\n",
                     anyReliable ? "miss" : "unreliable", canaryFails);
-      if (canaryFails >= 3) {
+      if (canaryFails == 3) {
+        // The field-verified healer: a refetch rewrites the file through fresh
+        // littlefs blocks, so even the read-path wedge clears without a reboot.
+        Serial.println("[blocklist] refetching -- fresh download rewrites the file blocks");
+        fetchDefaultBlocklist();
+      } else if (canaryFails >= 5) {
         prefs.begin("blk", false);
         uint8_t restarts = prefs.getUChar("restarts", 0);
         if (restarts >= 3) {
