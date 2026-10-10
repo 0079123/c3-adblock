@@ -213,3 +213,11 @@ tdm.qq.com
 trace.inlong.qq.com
 # 腾讯视频 P2P NAT 穿透（用户明确反对 P2P 上传）
 apd-vodp2pnat.teg.tencent-cloud.net
+
+# ---- 2026-10-10 腾讯视频 P2P/推荐（精确模式抓包）----
+# l.qq.com 整族是腾讯视频的 P2P/PCDN 通道（p/p2/p2p/pcdn/livep2*.l.qq.com），
+# 拦父域一网打尽。注意：腾讯视频的开屏/贴片广告画面本体走 tv.ott.video.qq.com
+# 等正片同域，DNS 层无法去除 —— 这里拦的是 P2P 上传和部分广告分发。
+l.qq.com
+# iacc.rec.* 个性化推荐上报（中等置信，若腾讯视频推荐/搜索异常则删）
+iacc.rec.qq.com
