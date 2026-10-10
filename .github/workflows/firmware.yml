@@ -54,6 +54,19 @@ jobs:
       - name: Placeholder secrets (real ones are gitignored; the firmware falls back to the setup portal)
         run: cp src/secrets.example.h src/secrets.h
 
+      # The classic-ESP32 build goes FIRST and its app image is collected immediately:
+      # a PIO/SCons quirk (observed since the page_gz pre-script was added) makes a later
+      # build wipe the OTHER env's products in .pio/build/, so nothing built earlier may
+      # be left in the build tree across steps. Each board's artifacts are copied out
+      # right after that board finishes.
+      - run: pio run -e esp32dev
+      - name: Collect the classic-ESP32 app image
+        run: |
+          set -eu
+          trap 'echo "::error::esp32dev collect failed at line $LINENO"' ERR
+          mkdir -p out
+          cp .pio/build/esp32dev/firmware.bin out/firmware-esp32dev.bin
+
       - run: pio run -e c3
 
       # The filesystem image carries the blocklist. data/blocklist.bin is gitignored, so pull
@@ -66,17 +79,13 @@ jobs:
           test -s data/blocklist.bin
       - run: pio run -e c3 -t buildfs
 
-      - run: pio run -e esp32dev
-
-      - name: Collect the release assets
+      - name: Collect the C3 release assets
         run: |
           set -eu
-          trap 'echo "::error::Collect failed at line $LINENO"; ls .pio/build/c3/ 2>&1 | head -30 | while IFS= read -r l; do echo "::error::  $l"; done' ERR
-          mkdir -p out
-          # App images are named after the board so the OTA URL is unambiguous.
+          trap 'echo "::error::c3 collect failed at line $LINENO"' ERR
+          # Installer-only parts, all from the C3 build. Collected immediately after the
+          # buildfs step for the same coexistence reason as above.
           cp .pio/build/c3/firmware.bin        out/firmware-c3.bin
-          cp .pio/build/esp32dev/firmware.bin  out/firmware-esp32dev.bin
-          # Installer-only parts, all from the C3 build.
           cp .pio/build/c3/bootloader.bin out/
           cp .pio/build/c3/partitions.bin out/
           cp .pio/build/c3/littlefs.bin   out/
