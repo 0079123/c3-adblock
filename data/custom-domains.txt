@@ -178,3 +178,23 @@ rtb.tangelo.com.cn
 # ---- 继续挂起 ----
 # deepzero.com：vt.*，身份未查证
 # deepzero.com
+
+# ---- 2026-10-10 用户抓包点名单独追加 ----
+# 芒果TV / 银河奇艺 的 gtm-cn 调度实例（用户观看时定位的广告端点，非播放流）。
+# ⚠️ GTM 实例名会轮换，新实例名出现时会绕过；若视频加载异常删这两行
+gtm-cn-uax3gmahh01.mgtv.com
+gtm-cn-36z3vej8105.hitv.com
+# 优酷 合益（阿里妈妈）广告服务静态资源
+aserver-heyi-static-tel.youku.com
+# 优酷投放的广告 CDN 边缘主机（精确主机，不碰 cdngslb.com 父域）
+t.youku.com.w.cdngslb.com
+
+# ---- 同批：遥测/统计（部分上游已拦，冗余加固防上游变动） ----
+qchannel01.cn
+qchannel03.cn
+bdurl.net
+mmstat.com
+reachmax.cn
+# ⚠️ qy.net 是爱奇艺的域（非腾讯）：覆盖 msg.qy.net 等推送/遥测子域，
+#    可能影响爱奇艺的消息推送 —— 文件此前注释过同类警告，按点名加入
+qy.net
