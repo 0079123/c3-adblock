@@ -869,7 +869,8 @@ static void handleStats() {
              + ",\"cachehits\":" + dnsCacheHits + ",\"cachemiss\":" + dnsCacheMiss +
              ",\"blocking\":" + (blockingOn ? "true" : "false") +
              ",\"resumeIn\":" + (uint32_t)(!blockingOn && resumeAt ? (resumeAt - millis()) / 1000 : 0) +
-             ",\"defcreds\":" + ((strcmp(WEB_PASS, "CHANGE_ME_WEB_PASSWORD") == 0 || strcmp(OTA_PASS, "CHANGE_ME_OTA_PASSWORD") == 0) ? "true" : "false") +
+             ",\"defcreds\":" + ((strcmp(WEB_PASS, "102030Zz") == 0 || strcmp(OTA_PASS, "102030Zz") == 0 ||
+                                  strcmp(WEB_PASS, "CHANGE_ME_WEB_PASSWORD") == 0 || strcmp(OTA_PASS, "CHANGE_ME_OTA_PASSWORD") == 0) ? "true" : "false") +
              ",\"clients\":[";
   for (int i = 0; i < numClients; i++) { Dev& c = clients[i]; IPAddress ip(c.ip);
     j += (i ? "," : ""); j += "{\"ip\":\"" + ip.toString() + "\",\"mac\":\"" + macStr(c.mac) + "\",\"blocked\":" + c.blocked + ",\"allowed\":" + c.allowed + ",\"banned\":" + (c.banned?"true":"false") + "}"; }
@@ -1374,8 +1375,9 @@ void setup() {
   Serial.printf("WiFi up: %s\n", WiFi.localIP().toString().c_str());
   if (MDNS.begin("c3adblock")) { MDNS.addService("http", "tcp", 80); Serial.println("dashboard: http://c3adblock.local"); }
 
-  if (strcmp(WEB_PASS, "CHANGE_ME_WEB_PASSWORD") == 0 || strcmp(OTA_PASS, "CHANGE_ME_OTA_PASSWORD") == 0)
-    Serial.println("[WARN] secrets.h still has placeholder WEB_PASS/OTA_PASS — those are public "
+  if (strcmp(WEB_PASS, "102030Zz") == 0 || strcmp(OTA_PASS, "102030Zz") == 0 ||
+      strcmp(WEB_PASS, "CHANGE_ME_WEB_PASSWORD") == 0 || strcmp(OTA_PASS, "CHANGE_ME_OTA_PASSWORD") == 0)
+    Serial.println("[WARN] secrets.h WEB_PASS/OTA_PASS are a PUBLIC default — anyone who has seen the repo knows it. "
                     "(they're in the repo's example file). Set real values before trusting this "
                     "device on a network you don't fully control.");
 

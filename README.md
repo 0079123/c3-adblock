@@ -253,11 +253,9 @@ now also requires a custom `X-Requested-With: c3-adblock` header, which a plain
 can, which is what the dashboard's own JS does) — this is why `/forgetwifi` is
 no longer a bare URL you can visit directly; use the dashboard button instead.
 
-**Default credentials:** if `secrets.h` still has the placeholder
-`CHANGE_ME_WEB_PASSWORD` / `CHANGE_ME_OTA_PASSWORD` values from
-`secrets.example.h`, the device boots with a "password" that's public (it's
-sitting in this repo's example file). The firmware logs a warning over serial
-and shows a banner on the dashboard when this is the case — but it will still
+**Default credentials:** `secrets.example.h` ships `admin` / `102030Zz` as the
+default, and that value is PUBLIC (it's sitting in this repo). The firmware
+detects it — serial warning plus a dashboard banner — but the device will still
 boot and run, so don't skip setting real values in `secrets.h` before trusting
 this on a network you don't fully control.
 
