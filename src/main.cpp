@@ -1107,7 +1107,22 @@ static bool fetchBlocklist(String url) {
     size_t avail = stream->available();
     if (avail) {
       int n = stream->readBytes(b, avail > sizeof(b) ? sizeof(b) : avail);
-      if (n > 0) { f.write(b, n); total += n; idle = millis(); }
+      if (n > 0) {
+        size_t w = f.write(b, n);
+        if (w != (size_t)n) {
+          // LittleFS full: the live list plus the pending one exceeded the partition
+          // (field-verified: this silently installed a truncated blob and every lookup
+          // forwarded). Recover without ever pausing blocking: unlink the LIVE list --
+          // its still-open handle keeps serving the old bytes -- and give the fresh
+          // file the whole partition.
+          f.close(); LittleFS.remove(BLOCKLIST_PATH);
+          f = LittleFS.open("/blocklist.new", "w");
+          if (!f) { http.end(); updateStatus = "fs full and reopen failed"; return false; }
+          w = f.write(b, n);
+          if (w != (size_t)n) { f.close(); http.end(); updateStatus = "fs full twice"; return false; }
+        }
+        total += n; idle = millis();
+      }
       // Every ~8 KB written, service pending DNS queries once. Small enough that the
       // socket stays busy, frequent enough that clients aren't stalled. NOTE: only DNS
       // is serviced, never web.handleClient() -- this runs inside the /fetchnow handler
