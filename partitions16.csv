@@ -1,0 +1,9 @@
+# Name,   Type, SubType, Offset,   Size, Flags
+# 16MB layout for ESP32-S3: dual OTA slots (2 MB each) + a huge LittleFS for the
+# blocklist (10.4 MB ~= 2.1M domain entries at 5 B/hash) + generous NVS.
+nvs,        data, nvs,      0x9000,   0x5000
+otadata,    data, ota,      0xe000,   0x2000
+app0,       app,  ota_0,    0x10000,  0x1F0000
+app1,       app,  ota_1,    0x200000, 0x1F0000
+spiffs,     data, spiffs,   0x400000, 0xBF0000
+coredump,   data, coredump, 0xFF0000, 0x10000
